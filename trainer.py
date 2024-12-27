@@ -25,7 +25,7 @@ class MoGTrainer(pl.LightningModule):
         self.save_hyperparameters()
 
         # Instantiate SetTransformer++ and ConditionalTransformerLM
-        self.set_transformer = SetTransformer2(dim_output, dim_hidden, num_heads, num_blocks, dim_output)
+        self.set_transformer = SetTransformer2(dim_output, dim_hidden, num_heads, num_blocks, dim_output, ln=True)
         self.conditional_lm = ConditionalTransformerLM(
             dim_set_output=dim_hidden,
             dim_output=dim_output,
@@ -213,7 +213,7 @@ class MoGTrainer(pl.LightningModule):
         """
         Calculates the loss function:
             1. Cross-entropy loss for existence prediction.
-            2. L2 loss for mean and log-variance after best matching.
+            2. L2 loss for mean and log-variance.
 
         Args:
             existence_logits: Predicted existence logits, shape [batch_size, max_components, 1]
@@ -337,7 +337,7 @@ if __name__ == "__main__":
     )
 
     model = MoGTrainer(
-        dim_output=2, dim_hidden=64, num_heads=4, num_blocks=6, max_components=5,
+        dim_output=2, dim_hidden=128, num_heads=4, num_blocks=4, max_components=5,
         mdn_components=4, min_components=1, min_dist=2.0, min_logvar=-2.0, max_logvar=2.0, num_samples=100,
         check_test_loss_every_n_epoch=1
     )
