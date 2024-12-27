@@ -3,70 +3,107 @@ import torch.nn as nn
 from torch.nn import functional as F
 from modules import SetTransformer2
 
-class AmortizedMoG(nn.Module):
-    def __init__(self, dim_input, dim_output, dim_hidden, num_heads, num_blocks, max_components):
+class ConditionalTransformerLM(nn.Module):
+    def __init__(self, dim_set_output, dim_output, dim_hidden, num_heads, num_blocks, max_components, vocab_size):
         super().__init__()
         self.max_components = max_components
-        self.set_transformer = SetTransformer2(dim_input, dim_hidden, num_heads, num_blocks, dim_output)
-        self.pre_existence = nn.Linear(dim_hidden, dim_hidden)
-        self.pre_mean = nn.Linear(dim_hidden, dim_hidden)
-        self.pre_logvar = nn.Linear(dim_hidden, dim_hidden)
-        self.existence_predictor = nn.Linear(dim_hidden, 1)  # Binary existence prediction
-        self.mean_predictor = nn.Linear(dim_hidden, dim_output)  # Mean prediction
-        self.logvar_predictor = nn.Linear(dim_hidden, dim_output)  # Log-variance prediction
+        self.dim_output = dim_output
+        self.dim_hidden = dim_hidden
 
-    def forward(self, x):
+        # Input embedding layer
+        self.input_embedding = nn.Linear(dim_set_output + 1 + 2 * dim_output, dim_hidden) # +1 for existence, +2*dim_output for mean and logvar
+
+        # Transformer (decoder-only)
+        decoder_layer = nn.TransformerEncoderLayer(d_model=dim_hidden, nhead=num_heads, dim_feedforward=dim_hidden, batch_first=True)
+        self.transformer = nn.TransformerEncoder(decoder_layer, num_layers=num_blocks)
+
+        # Output layers
+        self.existence_predictor = nn.Linear(dim_hidden, 1)
+        self.mean_predictor = nn.Linear(dim_hidden, dim_output)
+        self.logvar_predictor = nn.Linear(dim_hidden, dim_output)
+
+        # Token to indicate start of sequence (learnable)
+        self.sos_token = nn.Parameter(torch.randn(1, 1, dim_hidden))
+
+        # Positional encoding
+        self.positional_encoding = nn.Parameter(torch.randn(1, max_components + 1, dim_hidden)) # +1 for set_transformer output
+
+    def forward(self, set_transformer_output, targets=None):
         """
         Args:
-            x: Input set of vectors, shape [batch_size, num_samples, dim_input]
+            set_transformer_output: Output from SetTransformer++, shape [batch_size, dim_set_output]
+            targets: During training, the ground truth targets (existence, mean, logvar),
+                     shape [batch_size, max_components, 1 + 2*dim_output].
+                     During inference, this can be None.
 
         Returns:
-            existence_logits: Logits for the existence of each component, shape [batch_size, max_components]
+            existence_logits: Logits for component existence, shape [batch_size, max_components, 1]
             means: Predicted means, shape [batch_size, max_components, dim_output]
-            logvars: Predicted log-variances, shape [batch_size, max_components, dim_output]
+            logvars: Predicted logvars, shape [batch_size, max_components, dim_output]
         """
-        batch_size = x.shape[0]
-        # Pass the set through the Set Transformer
-        set_embedding = self.set_transformer(x)  # Shape: [batch_size, dim_hidden]
 
-        # Autoregressive prediction of Gaussian components
-        existence_logits = []
-        means = []
-        logvars = []
+        batch_size = set_transformer_output.shape[0]
 
-        # Create a tensor to store previously predicted components
-        prev_components = torch.zeros(batch_size, 0, set_embedding.shape[-1], device=x.device)
+        # Create SOS token (start of sequence)
+        sos_tokens = self.sos_token.repeat(batch_size, 1, 1)  # Shape: [batch_size, 1, dim_hidden]
 
-        for _ in range(self.max_components):
-            # Concatenate set embedding with embeddings of previously predicted components
-            combined_embedding = torch.cat([set_embedding.unsqueeze(1), prev_components], dim=1)
+        # Prepare input embeddings for the Transformer
+        if targets is not None:  # Training mode
+            # Concatenate Set Transformer output with target components
+            set_transformer_output_expanded = set_transformer_output.unsqueeze(1).repeat(1, self.max_components, 1)
+            inputs = torch.cat([set_transformer_output_expanded, targets], dim=-1)
+            inputs = self.input_embedding(inputs)
 
-            # Pass the combined embedding through separate linear layers
-            existence_embedding = F.relu(self.pre_existence(combined_embedding.mean(dim=1)))
-            mean_embedding = F.relu(self.pre_mean(combined_embedding.mean(dim=1)))
-            logvar_embedding = F.relu(self.pre_logvar(combined_embedding.mean(dim=1)))
+            # Add positional encodings
+            inputs = torch.cat([sos_tokens, inputs], dim=1)
+            inputs = inputs + self.positional_encoding[:, :inputs.shape[1], :]
 
-            # Predict existence, mean, and log-variance
-            existence_logit = self.existence_predictor(existence_embedding).squeeze(-1)
-            mean = self.mean_predictor(mean_embedding)
-            logvar = self.logvar_predictor(logvar_embedding)
+            # Create target mask for autoregressive prediction
+            tgt_mask = self.generate_square_subsequent_mask(inputs.shape[1]).to(inputs.device)
 
-            # Store predictions
-            existence_logits.append(existence_logit)
-            means.append(mean)
-            logvars.append(logvar)
+            # Pass through Transformer
+            transformer_output = self.transformer(inputs, mask=tgt_mask)
 
-            # Create embedding for this component
-            component_embedding = torch.cat([existence_logit.unsqueeze(-1), mean, logvar], dim=-1)
+        else:  # Inference mode
+            transformer_output = sos_tokens
+            # Add positional encodings
+            transformer_output = transformer_output + self.positional_encoding[:, :1, :]
+            for _ in range(self.max_components):
+                # Create target mask for autoregressive prediction
+                tgt_mask = self.generate_square_subsequent_mask(transformer_output.shape[1]).to(transformer_output.device)
 
-            # If predicted to exist, add to previous components
-            # If not, we still add it but it will be weighted less in future predictions
-            # due to the existence logit being small (or negative).
-            prev_components = torch.cat([prev_components, component_embedding.unsqueeze(1)], dim=1)
+                # Pass through Transformer
+                transformer_output_step = self.transformer(transformer_output, mask=tgt_mask)
 
-        # Stack outputs
-        existence_logits = torch.stack(existence_logits, dim=1)  # Shape: [batch_size, max_components]
-        means = torch.stack(means, dim=1)  # Shape: [batch_size, max_components, dim_output]
-        logvars = torch.stack(logvars, dim=1)  # Shape: [batch_size, max_components, dim_output]
+                # Take the output for the last token
+                transformer_output_step = transformer_output_step[:, -1, :].unsqueeze(1)
+
+                # Predict the next component
+                existence_logit = self.existence_predictor(transformer_output_step)
+                mean = self.mean_predictor(transformer_output_step)
+                logvar = self.logvar_predictor(transformer_output_step)
+
+                # Form the next input token
+                next_token_embedding = self.input_embedding(torch.cat([set_transformer_output.unsqueeze(1), existence_logit, mean, logvar], dim=-1))
+
+                # Add positional encodings
+                next_token_embedding = next_token_embedding + self.positional_encoding[:, transformer_output.shape[1], :].unsqueeze(1)
+
+                # Concatenate to the transformer output
+                transformer_output = torch.cat([transformer_output, next_token_embedding], dim=1)
+
+        # Predict existence, mean, and logvar
+        existence_logits = self.existence_predictor(transformer_output[:, 1:, :])  # Shape: [batch_size, max_components, 1]
+        means = self.mean_predictor(transformer_output[:, 1:, :])  # Shape: [batch_size, max_components, dim_output]
+        logvars = self.logvar_predictor(transformer_output[:, 1:, :])  # Shape: [batch_size, max_components, dim_output]
 
         return existence_logits, means, logvars
+
+    def generate_square_subsequent_mask(self, sz):
+        """
+        Generate a square mask for the sequence. The masked positions are filled with float('-inf').
+        Unmasked positions are filled with float(0.0).
+        """
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask

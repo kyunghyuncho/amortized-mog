@@ -1,75 +1,119 @@
 import torch
+import torch.nn.functional as F
 import pytorch_lightning as pl
-from pytorch_lightning.loggers import WandbLogger  # Import WandbLogger
+from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader, TensorDataset
-from amortized_mog import AmortizedMoG
+from amortized_mog import ConditionalTransformerLM
 from synthetic_mog import generate_gaussian_mixture
 from modules import SetTransformer2
-import wandb  # Import wandb
+import wandb
 
 class MoGTrainer(pl.LightningModule):
     def __init__(self, dim_input, dim_output, dim_hidden, num_heads, num_blocks, max_components,
                  min_components, min_dist, min_logvar, max_logvar, num_samples, lr=1e-3):
         super().__init__()
-        self.save_hyperparameters()  # Hyperparameters are automatically logged by wandb
-        self.model = AmortizedMoG(dim_input, dim_output, dim_hidden, num_heads, num_blocks, max_components)
-        self.hparams.update({
-            "dim_input": dim_input,
-            "dim_output": dim_output,
-            "dim_hidden": dim_hidden,
-            "num_heads": num_heads,
-            "num_blocks": num_blocks,
-            "max_components": max_components,
-            "min_components": min_components,
-            "min_dist": min_dist,
-            "min_logvar": min_logvar,
-            "max_logvar": max_logvar,
-            "num_samples": num_samples,
-            "lr": lr,
-        })
+        self.save_hyperparameters()
+
+        # Instantiate SetTransformer++ and ConditionalTransformerLM
+        self.set_transformer = SetTransformer2(dim_input, dim_hidden, num_heads, num_blocks, dim_output)
+        self.conditional_lm = ConditionalTransformerLM(
+            dim_set_output=dim_hidden,
+            dim_output=dim_output,
+            dim_hidden=dim_hidden,
+            num_heads=num_heads,
+            num_blocks=num_blocks,
+            max_components=max_components,
+            vocab_size=100 # not used in this case
+        )
 
     def forward(self, x):
-        return self.model(x)
+        # Pass input through SetTransformer++
+        set_transformer_output = self.set_transformer(x)
+
+        # Pass SetTransformer++ output through ConditionalTransformerLM
+        existence_logits, means, logvars = self.conditional_lm(set_transformer_output)
+        return existence_logits, means, logvars
 
     def training_step(self, batch, batch_idx):
-        mog_params, samples = batch
-        existence_logits, pred_means, pred_logvars = self(samples)
+        num_components, means, logvars, existence, samples = batch
+        mog_params = {
+            "num_components": num_components,
+            "means": means,
+            "logvars": logvars,
+            "existence": existence
+        }
+
+        # Pass input through SetTransformer++
+        set_transformer_output = self.set_transformer(samples)
+
+        # Prepare targets for ConditionalTransformerLM
+        targets = torch.cat([existence.unsqueeze(-1), means, logvars], dim=-1)
+
+        # Pass SetTransformer++ output and targets through ConditionalTransformerLM
+        existence_logits, pred_means, pred_logvars = self.conditional_lm(set_transformer_output, targets)
 
         loss = self.calculate_loss(existence_logits, pred_means, pred_logvars, mog_params)
         self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
-        mog_params, samples = batch
-        existence_logits, pred_means, pred_logvars = self(samples)
+        num_components, means, logvars, existence, samples = batch
+        mog_params = {
+            "num_components": num_components,
+            "means": means,
+            "logvars": logvars,
+            "existence": existence
+        }
+
+        # Pass input through SetTransformer++
+        set_transformer_output = self.set_transformer(samples)
+
+        # Prepare targets for ConditionalTransformerLM
+        targets = torch.cat([existence.unsqueeze(-1), means, logvars], dim=-1)
+
+        # Pass SetTransformer++ output and targets through ConditionalTransformerLM
+        existence_logits, pred_means, pred_logvars = self.conditional_lm(set_transformer_output, targets)
 
         loss = self.calculate_loss(existence_logits, pred_means, pred_logvars, mog_params)
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     def test_step(self, batch, batch_idx):
-        mog_params, samples = batch
-        existence_logits, pred_means, pred_logvars = self(samples)
+        num_components, means, logvars, existence, samples = batch
+        mog_params = {
+            "num_components": num_components,
+            "means": means,
+            "logvars": logvars,
+            "existence": existence
+        }
+
+        # Pass input through SetTransformer++
+        set_transformer_output = self.set_transformer(samples)
+
+        # Pass SetTransformer++ output through ConditionalTransformerLM for inference
+        existence_logits, pred_means, pred_logvars = self.conditional_lm(set_transformer_output)
 
         loss = self.calculate_loss(existence_logits, pred_means, pred_logvars, mog_params)
         self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
     def calculate_loss(self, existence_logits, pred_means, pred_logvars, mog_params):
-        """
-        Calculates the combined loss:
-            1. Cross-entropy loss for existence prediction.
-            2. Gaussian NLL for mean and log-variance prediction for existing components.
-        """
+        # Get the maximum number of components
+        max_components = mog_params["existence"].shape[1]
+
+        # Slice the existence_logits tensor to match the size of mog_params["existence"]
+        existence_logits = existence_logits[:, :max_components, :].squeeze(-1)
+
+        # 1. Cross-entropy loss for existence prediction
         existence_loss = F.binary_cross_entropy_with_logits(existence_logits, mog_params["existence"])
 
-        # Calculate Gaussian NLL only for existing components
+        # 2. Gaussian NLL for mean and log-variance prediction for existing components
         nll_loss = 0
         for i in range(existence_logits.shape[0]):  # Iterate over batch
             for j in range(existence_logits.shape[1]):  # Iterate over components
                 if mog_params["existence"][i, j] == 1:
                     dist = torch.distributions.Normal(pred_means[i, j], torch.exp(0.5 * pred_logvars[i, j]))
-                    nll = -dist.log_prob(mog_params["means"][i, j]).sum()
+                    nll = -dist.log_prob(mog_params["means"][i, j]).sum()  # Sum over dimensions
                     nll_loss += nll
 
         # Normalize NLL loss by the number of existing components
@@ -116,7 +160,6 @@ class MoGTrainer(pl.LightningModule):
         self.test_dataset = TensorDataset(*test_mog_params, test_samples)
 
     def _convert_to_tensors(self, mog_params_dict):
-        # Convert the dictionary of dictionaries to a tuple of tensors
         return (mog_params_dict['num_components'], mog_params_dict['means'], mog_params_dict['logvars'], mog_params_dict['existence'])
 
     def train_dataloader(self):
@@ -135,7 +178,8 @@ if __name__ == "__main__":
 
     trainer = pl.Trainer(
         max_epochs=10,
-        logger=wandb_logger  # Use wandb_logger
+        logger=wandb_logger,  # Use wandb_logger
+        accelerator="cpu"
     )
 
     model = MoGTrainer(
