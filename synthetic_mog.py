@@ -1,6 +1,13 @@
 import torch
 
-def generate_gaussian_mixture(batch_size, min_components, max_components, dim_output, min_dist, min_logvar, max_logvar, num_samples):
+def generate_gaussian_mixture(batch_size, 
+                              min_components, 
+                              max_components, 
+                              dim_output, 
+                              min_dist, 
+                              min_logvar, 
+                              max_logvar, 
+                              num_samples):
     """
     Generates synthetic Gaussian Mixture Model data.
 
