@@ -236,39 +236,29 @@ class MoGTrainer(pl.LightningModule):
         # 1. Cross-entropy loss for existence prediction
         existence_loss = F.binary_cross_entropy_with_logits(existence_logits, mog_params["existence"])
 
-        # 2. L2 loss for mean and log-variance after best matching
+        # 2. L2 loss for mean and log-variance
         total_mean_l2_loss = 0
         total_logvar_l2_loss = 0
 
         for i in range(pred_means.shape[0]):  # Iterate over the batch
-            # Get predicted components
-            pred_num_components = mog_params["num_components"][i]  # Use the true number of components
-            pred_means_i = pred_means[i, :pred_num_components, :]
-            pred_logvars_i = pred_logvars[i, :pred_num_components, :]
+            for j in range(pred_means.shape[1]): # Iterate over the maximum number of components
+                if mog_params["existence"][i, j] == 0:
+                    # this should be the end of the components
+                    continue
+                pred_means_ij = pred_means[i, j, :]
+                pred_logvars_ij = pred_logvars[i, j, :]
+                true_means_ij = mog_params["means"][i, j, :]
+                true_logvars_ij = mog_params["logvars"][i, j, :]
 
-            # Get ground truth components
-            true_num_components = mog_params["num_components"][i]
-            true_means_i = mog_params["means"][i, :true_num_components, :]
-            true_logvars_i = mog_params["logvars"][i, :true_num_components, :]
+                if pred_means_ij.shape[0] == 0 or true_means_ij.shape[0] == 0:
+                    continue
 
-            if pred_means_i.shape[0] == 0 or true_means_i.shape[0] == 0:
-                continue
+                # Calculate L2 loss for matched means and log-variances
+                mean_l2_loss = F.mse_loss(pred_means_ij, true_means_ij, reduction='sum')
+                logvar_l2_loss = F.mse_loss(pred_logvars_ij, true_logvars_ij, reduction='sum')
 
-            # Calculate pairwise distances between predicted and true means
-            distances = torch.cdist(pred_means_i, true_means_i)  # [pred_num_components, true_num_components]
-
-            # Convert to numpy for linear_sum_assignment
-            distances_np = distances.detach().cpu().numpy()
-
-            # Find best matching using the Hungarian algorithm
-            row_ind, col_ind = linear_sum_assignment(distances_np)
-
-            # Calculate L2 loss for matched means and log-variances
-            mean_l2_loss = F.mse_loss(pred_means_i[row_ind], true_means_i[col_ind], reduction='sum')
-            logvar_l2_loss = F.mse_loss(pred_logvars_i[row_ind], true_logvars_i[col_ind], reduction='sum')
-
-            total_mean_l2_loss += mean_l2_loss
-            total_logvar_l2_loss += logvar_l2_loss
+                total_mean_l2_loss += mean_l2_loss
+                total_logvar_l2_loss += logvar_l2_loss
 
         # Normalize losses by the number of samples in the batch
         if pred_means.shape[0] > 0:
