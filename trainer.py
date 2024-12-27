@@ -1,12 +1,16 @@
 import torch
 import torch.nn.functional as F
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import EarlyStopping
+
 from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader, TensorDataset
 from amortized_mog import ConditionalTransformerLM
 from synthetic_mog import generate_gaussian_mixture
 from modules import SetTransformer2
 import wandb
+from scipy.optimize import linear_sum_assignment
+import numpy as np
 
 class MoGTrainer(pl.LightningModule):
     def __init__(self, dim_input, dim_output, dim_hidden, num_heads, num_blocks, max_components,
@@ -93,9 +97,39 @@ class MoGTrainer(pl.LightningModule):
         # Pass SetTransformer++ output through ConditionalTransformerLM for inference
         existence_logits, pred_means, pred_logvars = self.conditional_lm(set_transformer_output)
 
-        loss = self.calculate_loss(existence_logits, pred_means, pred_logvars, mog_params)
-        self.log('test_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        return loss
+        # 1. Check accuracy of the number of components
+        pred_num_components = (torch.sigmoid(existence_logits.squeeze(-1)) > 0.5).sum(dim=1)
+        num_components_accuracy = (pred_num_components == mog_params["num_components"]).float().mean()
+        self.log("test_num_components_accuracy", num_components_accuracy)
+
+        # 2. Calculate mean distance after best matching
+        total_mean_distance = 0
+        for i in range(means.shape[0]):  # Iterate over the batch
+            pred_means_i = pred_means[i, :pred_num_components[i], :]  # Get predicted means for existing components
+            true_means_i = mog_params["means"][i, :mog_params["num_components"][i], :]  # Get true means
+
+            if pred_means_i.shape[0] == 0 or true_means_i.shape[0] == 0:
+                continue
+
+            # Calculate pairwise distances
+            distances = torch.cdist(pred_means_i, true_means_i)  # Pairwise Euclidean distances
+
+            # Convert to numpy for linear_sum_assignment
+            distances_np = distances.detach().cpu().numpy()
+
+            # Find best matching using the Hungarian algorithm
+            row_ind, col_ind = linear_sum_assignment(distances_np)
+
+            # Calculate mean distance for the best matching
+            mean_distance = distances_np[row_ind, col_ind].mean()
+            total_mean_distance += mean_distance
+
+        # Average mean distance over the batch
+        if means.shape[0] > 0:
+          avg_mean_distance = total_mean_distance / means.shape[0]
+          self.log("test_mean_distance", avg_mean_distance)
+
+        return num_components_accuracy, avg_mean_distance
 
     def calculate_loss(self, existence_logits, pred_means, pred_logvars, mog_params):
         # Get the maximum number of components
@@ -131,19 +165,19 @@ class MoGTrainer(pl.LightningModule):
     def prepare_data(self):
         # Generate synthetic data
         train_mog_params, train_samples = generate_gaussian_mixture(
-            batch_size=1000, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
+            batch_size=10000, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
             dim_output=self.hparams.dim_output, min_dist=self.hparams.min_dist,
             min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
             num_samples=self.hparams.num_samples
         )
         val_mog_params, val_samples = generate_gaussian_mixture(
-            batch_size=200, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
+            batch_size=500, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
             dim_output=self.hparams.dim_output, min_dist=self.hparams.min_dist,
             min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
             num_samples=self.hparams.num_samples
         )
         test_mog_params, test_samples = generate_gaussian_mixture(
-            batch_size=200, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
+            batch_size=500, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
             dim_output=self.hparams.dim_output, min_dist=self.hparams.min_dist,
             min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
             num_samples=self.hparams.num_samples
@@ -176,10 +210,19 @@ if __name__ == "__main__":
     # Initialize wandb logger
     wandb_logger = WandbLogger(project="amortized-mog-fitting", log_model=True)
 
+    # Add EarlyStopping callback
+    early_stopping = EarlyStopping(
+        monitor="val_loss",  # Monitor validation loss
+        patience=10,         # Stop after 10 epochs with no improvement
+        mode="min",          # Look for minimum validation loss
+        verbose=True         # Print messages when early stopping happens
+    )
+
     trainer = pl.Trainer(
-        max_epochs=10,
+        max_epochs=1000,
         logger=wandb_logger,  # Use wandb_logger
-        accelerator="cpu"
+        accelerator="cpu",
+        callbacks=[early_stopping]  # Add the callback
     )
 
     model = MoGTrainer(
