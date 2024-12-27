@@ -97,7 +97,7 @@ class MoGTrainer(pl.LightningModule):
             2. Mean distance after best matching.
 
         Args:
-            existence_logits: Predicted existence logits, shape [batch_size, max_components, 1]
+            existence: Predicted existence, shape [batch_size, max_components, 1]
             pred_means: Predicted means, shape [batch_size, max_components, dim_output]
             mog_params: Dictionary containing ground truth MoG parameters.
 
@@ -105,14 +105,15 @@ class MoGTrainer(pl.LightningModule):
             num_components_accuracy: Accuracy of the number of components prediction.
             avg_mean_distance: Average mean distance after best matching.
         """
-        # 1. Check accuracy of the number of components
+        # 1. Check the absolute difference between the predicted and true number of components
         pred_num_components = existence.sum(dim=1)
-        num_components_accuracy = (pred_num_components == mog_params["num_components"]).float().mean()
+        true_num_components = mog_params["num_components"]
+        num_components_diff = (pred_num_components == true_num_components).float().mean()
 
         # 2. Calculate mean distance after best matching
         total_mean_distance = 0
         for i in range(pred_means.shape[0]):  # Iterate over the batch
-            pred_means_i = pred_means[i, :pred_num_components[i], :]  # Get predicted means
+            pred_means_i = pred_means[i, :int(pred_num_components[i].item()), :]  # Get predicted means
             true_means_i = mog_params["means"][i, :mog_params["num_components"][i], :]  # Get true means
 
             if pred_means_i.shape[0] == 0 or true_means_i.shape[0] == 0:
@@ -134,14 +135,14 @@ class MoGTrainer(pl.LightningModule):
         # Average mean distance over the batch
         avg_mean_distance = total_mean_distance / pred_means.shape[0] if pred_means.shape[0] > 0 else torch.tensor(0.0)
 
-        return num_components_accuracy, avg_mean_distance
+        return num_components_diff, avg_mean_distance
 
     def evaluate_test_metrics(self):
         """
         Evaluates the test metrics (accuracy and mean distance) and logs them.
         """
         self.eval()  # Set the model to evaluation mode
-        num_components_accuracies = []
+        num_components_diffs = []
         avg_mean_distances = []
 
         for batch in self.test_dataloader():
@@ -160,17 +161,17 @@ class MoGTrainer(pl.LightningModule):
             existence, pred_means, pred_logvars = self.conditional_lm(set_transformer_output)
 
             # Calculate metrics
-            num_components_accuracy, avg_mean_distance = self.calculate_metrics(existence, pred_means, mog_params)
+            num_components_diff, avg_mean_distance = self.calculate_metrics(existence, pred_means, mog_params)
 
-            num_components_accuracies.append(num_components_accuracy)
+            num_components_diffs.append(num_components_diff)
             avg_mean_distances.append(avg_mean_distance)
 
         self.train()  # Set the model back to training mode
 
         # Calculate average metrics and log them
-        avg_num_components_accuracy = torch.stack(num_components_accuracies).mean()
+        avg_num_components_accuracy = torch.stack(num_components_diffs).mean()
         avg_mean_distance = torch.tensor(avg_mean_distances).mean() if avg_mean_distances else torch.tensor(0.0)
-        self.log("test_num_components_accuracy_periodic", avg_num_components_accuracy)
+        self.log("test_num_components_diff_periodic", avg_num_components_accuracy)
         self.log("test_mean_distance_periodic", avg_mean_distance)
 
     def test_step(self, batch, batch_idx):
@@ -189,13 +190,13 @@ class MoGTrainer(pl.LightningModule):
         existence, pred_means, pred_logvars = self.conditional_lm(set_transformer_output)
 
         # Calculate metrics
-        num_components_accuracy, avg_mean_distance = self.calculate_metrics(existence, pred_means, mog_params)
+        num_components_diff, avg_mean_distance = self.calculate_metrics(existence, pred_means, mog_params)
 
         # Log metrics
-        self.log("test_num_components_accuracy", num_components_accuracy)
+        self.log("test_num_components_diff", num_components_diff)
         self.log("test_mean_distance", avg_mean_distance)
 
-        return num_components_accuracy, avg_mean_distance
+        return num_components_diff, avg_mean_distance
 
     def calculate_loss(self, existence_logits, pred_means, pred_logvars, mog_params):
         # Get the maximum number of components
