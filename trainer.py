@@ -13,13 +13,14 @@ from scipy.optimize import linear_sum_assignment
 import numpy as np
 
 class MoGTrainer(pl.LightningModule):
-    def __init__(self, dim_input, dim_output, dim_hidden, num_heads, num_blocks, max_components,
-                 min_components, min_dist, min_logvar, max_logvar, num_samples, lr=1e-3):
+    def __init__(self, dim_output, dim_hidden, num_heads, num_blocks, max_components,
+                 min_components, min_dist, min_logvar, max_logvar, num_samples, 
+                 lr=1e-3, check_test_loss_every_n_epoch=1):
         super().__init__()
         self.save_hyperparameters()
 
         # Instantiate SetTransformer++ and ConditionalTransformerLM
-        self.set_transformer = SetTransformer2(dim_input, dim_hidden, num_heads, num_blocks, dim_output)
+        self.set_transformer = SetTransformer2(dim_output, dim_hidden, num_heads, num_blocks, dim_output)
         self.conditional_lm = ConditionalTransformerLM(
             dim_set_output=dim_hidden,
             dim_output=dim_output,
@@ -82,30 +83,36 @@ class MoGTrainer(pl.LightningModule):
         self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
         return loss
 
-    def test_step(self, batch, batch_idx):
-        num_components, means, logvars, existence, samples = batch
-        mog_params = {
-            "num_components": num_components,
-            "means": means,
-            "logvars": logvars,
-            "existence": existence
-        }
+    def on_train_epoch_end(self):
+        """
+        Called at the end of each training epoch.
+        """
+        if self.current_epoch % self.hparams.check_test_loss_every_n_epoch == 0:
+            self.evaluate_test_metrics()
 
-        # Pass input through SetTransformer++
-        set_transformer_output = self.set_transformer(samples)
+    def calculate_metrics(self, existence, pred_means, mog_params):
+        """
+        Calculates the evaluation metrics:
+            1. Accuracy of the number of components.
+            2. Mean distance after best matching.
 
-        # Pass SetTransformer++ output through ConditionalTransformerLM for inference
-        existence_logits, pred_means, pred_logvars = self.conditional_lm(set_transformer_output)
+        Args:
+            existence_logits: Predicted existence logits, shape [batch_size, max_components, 1]
+            pred_means: Predicted means, shape [batch_size, max_components, dim_output]
+            mog_params: Dictionary containing ground truth MoG parameters.
 
+        Returns:
+            num_components_accuracy: Accuracy of the number of components prediction.
+            avg_mean_distance: Average mean distance after best matching.
+        """
         # 1. Check accuracy of the number of components
-        pred_num_components = (torch.sigmoid(existence_logits.squeeze(-1)) > 0.5).sum(dim=1)
+        pred_num_components = existence.sum(dim=1)
         num_components_accuracy = (pred_num_components == mog_params["num_components"]).float().mean()
-        self.log("test_num_components_accuracy", num_components_accuracy)
 
         # 2. Calculate mean distance after best matching
         total_mean_distance = 0
-        for i in range(means.shape[0]):  # Iterate over the batch
-            pred_means_i = pred_means[i, :pred_num_components[i], :]  # Get predicted means for existing components
+        for i in range(pred_means.shape[0]):  # Iterate over the batch
+            pred_means_i = pred_means[i, :pred_num_components[i], :]  # Get predicted means
             true_means_i = mog_params["means"][i, :mog_params["num_components"][i], :]  # Get true means
 
             if pred_means_i.shape[0] == 0 or true_means_i.shape[0] == 0:
@@ -125,9 +132,68 @@ class MoGTrainer(pl.LightningModule):
             total_mean_distance += mean_distance
 
         # Average mean distance over the batch
-        if means.shape[0] > 0:
-          avg_mean_distance = total_mean_distance / means.shape[0]
-          self.log("test_mean_distance", avg_mean_distance)
+        avg_mean_distance = total_mean_distance / pred_means.shape[0] if pred_means.shape[0] > 0 else torch.tensor(0.0)
+
+        return num_components_accuracy, avg_mean_distance
+
+    def evaluate_test_metrics(self):
+        """
+        Evaluates the test metrics (accuracy and mean distance) and logs them.
+        """
+        self.eval()  # Set the model to evaluation mode
+        num_components_accuracies = []
+        avg_mean_distances = []
+
+        for batch in self.test_dataloader():
+            num_components, means, logvars, existence, samples = batch
+            mog_params = {
+                "num_components": num_components,
+                "means": means,
+                "logvars": logvars,
+                "existence": existence
+            }
+
+            # Pass input through SetTransformer++
+            set_transformer_output = self.set_transformer(samples)
+
+            # Pass SetTransformer++ output through ConditionalTransformerLM for inference
+            existence, pred_means, pred_logvars = self.conditional_lm(set_transformer_output)
+
+            # Calculate metrics
+            num_components_accuracy, avg_mean_distance = self.calculate_metrics(existence, pred_means, mog_params)
+
+            num_components_accuracies.append(num_components_accuracy)
+            avg_mean_distances.append(avg_mean_distance)
+
+        self.train()  # Set the model back to training mode
+
+        # Calculate average metrics and log them
+        avg_num_components_accuracy = torch.stack(num_components_accuracies).mean()
+        avg_mean_distance = torch.tensor(avg_mean_distances).mean() if avg_mean_distances else torch.tensor(0.0)
+        self.log("test_num_components_accuracy_periodic", avg_num_components_accuracy)
+        self.log("test_mean_distance_periodic", avg_mean_distance)
+
+    def test_step(self, batch, batch_idx):
+        num_components, means, logvars, existence, samples = batch
+        mog_params = {
+            "num_components": num_components,
+            "means": means,
+            "logvars": logvars,
+            "existence": existence
+        }
+
+        # Pass input through SetTransformer++
+        set_transformer_output = self.set_transformer(samples)
+
+        # Pass SetTransformer++ output through ConditionalTransformerLM for inference
+        existence, pred_means, pred_logvars = self.conditional_lm(set_transformer_output)
+
+        # Calculate metrics
+        num_components_accuracy, avg_mean_distance = self.calculate_metrics(existence, pred_means, mog_params)
+
+        # Log metrics
+        self.log("test_num_components_accuracy", num_components_accuracy)
+        self.log("test_mean_distance", avg_mean_distance)
 
         return num_components_accuracy, avg_mean_distance
 
@@ -226,8 +292,9 @@ if __name__ == "__main__":
     )
 
     model = MoGTrainer(
-        dim_input=2, dim_output=2, dim_hidden=64, num_heads=4, num_blocks=2, max_components=5,
-        min_components=1, min_dist=2.0, min_logvar=-2.0, max_logvar=2.0, num_samples=100
+        dim_output=2, dim_hidden=64, num_heads=4, num_blocks=2, max_components=5,
+        min_components=1, min_dist=2.0, min_logvar=-2.0, max_logvar=2.0, num_samples=100,
+        check_test_loss_every_n_epoch=1
     )
 
     trainer.fit(model)

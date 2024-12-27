@@ -64,7 +64,16 @@ class ConditionalTransformerLM(nn.Module):
             # Pass through Transformer
             transformer_output = self.transformer(inputs, mask=tgt_mask)
 
+            # Predict existence, mean, and logvar
+            existence_logits = self.existence_predictor(transformer_output[:, 1:, :])  # Shape: [batch_size, max_components, 1]
+            means = self.mean_predictor(transformer_output[:, 1:, :])  # Shape: [batch_size, max_components, dim_output]
+            logvars = self.logvar_predictor(transformer_output[:, 1:, :])  # Shape: [batch_size, max_components, dim_output]
         else:  # Inference mode
+            # in the inference mode, we need to collect existence, mean, and logvar on the fly
+            existence_logits = None
+            means = None
+            logvars = None
+
             transformer_output = sos_tokens
             # Add positional encodings
             transformer_output = transformer_output + self.positional_encoding[:, :1, :]
@@ -83,19 +92,28 @@ class ConditionalTransformerLM(nn.Module):
                 mean = self.mean_predictor(transformer_output_step)
                 logvar = self.logvar_predictor(transformer_output_step)
 
+                # argmax to get existence
+                existence = (existence_logit > 0).float()
+
+                # Concatenate to the existing predictions
+                if existence_logits is None:
+                    existence_logits = existence
+                    means = mean
+                    logvars = logvar
+                else:
+                    existence_logits = torch.cat([existence_logits, existence], dim=1)
+                    means = torch.cat([means, mean], dim=1)
+                    logvars = torch.cat([logvars, logvar], dim=1)
+
                 # Form the next input token
-                next_token_embedding = self.input_embedding(torch.cat([set_transformer_output.unsqueeze(1), existence_logit, mean, logvar], dim=-1))
+                next_token_embedding = self.input_embedding(torch.cat([set_transformer_output.unsqueeze(1), 
+                                                                       existence, mean, logvar], dim=-1))
 
                 # Add positional encodings
                 next_token_embedding = next_token_embedding + self.positional_encoding[:, transformer_output.shape[1], :].unsqueeze(1)
 
                 # Concatenate to the transformer output
                 transformer_output = torch.cat([transformer_output, next_token_embedding], dim=1)
-
-        # Predict existence, mean, and logvar
-        existence_logits = self.existence_predictor(transformer_output[:, 1:, :])  # Shape: [batch_size, max_components, 1]
-        means = self.mean_predictor(transformer_output[:, 1:, :])  # Shape: [batch_size, max_components, dim_output]
-        logvars = self.logvar_predictor(transformer_output[:, 1:, :])  # Shape: [batch_size, max_components, dim_output]
 
         return existence_logits, means, logvars
 
