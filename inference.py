@@ -4,13 +4,9 @@ from amortized_mog import ConditionalTransformerLM
 import pytorch_lightning as pl
 from trainer import MoGTrainer
 
-def infer_mog(checkpoint_file, 
-              input_set, 
-              max_components, 
-              dim_hidden, 
-              dim_output, 
-              num_heads, 
-              num_blocks):
+from utils import find_latest_checkpoint
+
+def infer_mog(checkpoint_file, input_set):
     """
     Performs inference using a trained SetTransformer++ and ConditionalTransformerLM.
 
@@ -65,16 +61,13 @@ def infer_mog(checkpoint_file,
 # Example Usage
 if __name__ == "__main__":
     # Sample input set (replace with your actual input data)
-    input_set = torch.randn(100, 2)
+    input_set = torch.randn(100, 2) / 3.
+    input_set[:, 0] = input_set[:, 0] + 2.
+    input_set = torch.cat([input_set, torch.randn(100, 2) / 2. + 3.], dim=0)
 
     # Perform inference
-    predicted_mog = infer_mog("/Users/kyunghyuncho/Repos/amortized-mog/amortized-mog-fitting/tgcpnkst/checkpoints/epoch=35-step=11268.ckpt",
-                              input_set,
-                              max_components=5,
-                              dim_hidden=64,
-                              dim_output=2,
-                              num_heads=4,
-                              num_blocks=2)
+    predicted_mog = infer_mog(find_latest_checkpoint("/Users/kyunghyuncho/Repos/amortized-mog/amortized-mog-fitting/i6fksp7q/checkpoints/"),
+                              input_set)
     
     # Print the predicted MoG parameters
     print(predicted_mog)
@@ -91,12 +84,16 @@ if __name__ == "__main__":
         std = np.sqrt(np.exp(logvar))
 
         # std is a 2-dim vector. We need to plot a elipse with radius std[0] and std[1] centered at mean.
-        elipse = plt.matplotlib.patches.Ellipse(mean, std[0].item(), std[1].item(), fill=False, edgecolor='r', linestyle='--', linewidth=1.5)
+        elipse = plt.matplotlib.patches.Ellipse(mean, 
+                                                2 * std[0].item(), 
+                                                2 * std[1].item(), 
+                                                fill=False, edgecolor='r', linestyle='--', linewidth=1.5)
 
         plt.gca().add_artist(elipse)
     plt.legend()
     plt.savefig("predicted_mog.png")
 
+    import ipdb; ipdb.set_trace()
 
     
     

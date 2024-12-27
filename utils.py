@@ -23,4 +23,4 @@ def find_latest_checkpoint(checkpoint_path):
         if compare_epoch_and_step(epoch_and_step, latest_epoch_and_step):
             latest_epoch_and_step = epoch_and_step
             latest_checkpoint = filename
-    return latest_checkpoint
+    return f"{checkpoint_path}/{latest_checkpoint}"

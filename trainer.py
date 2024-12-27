@@ -338,7 +338,7 @@ if __name__ == "__main__":
     )
 
     model = MoGTrainer(
-        dim_output=2, dim_hidden=64, num_heads=4, num_blocks=2, max_components=5,
+        dim_output=2, dim_hidden=64, num_heads=4, num_blocks=6, max_components=5,
         min_components=1, min_dist=2.0, min_logvar=-2.0, max_logvar=2.0, num_samples=100,
         check_test_loss_every_n_epoch=1
     )
