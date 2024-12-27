@@ -10,6 +10,7 @@ from pytorch_lightning.loggers import WandbLogger
 from amortized_mog import ConditionalTransformerLM
 from synthetic_mog import generate_gaussian_mixture
 from modules import SetTransformer2
+from utils import log_prob_mog
 
 import wandb
 
@@ -18,7 +19,7 @@ import numpy as np
 
 class MoGTrainer(pl.LightningModule):
     def __init__(self, dim_output, dim_hidden, num_heads, num_blocks, max_components,
-                 min_components, min_dist, min_logvar, max_logvar, num_samples, 
+                 mdn_components, min_components, min_dist, min_logvar, max_logvar, num_samples, 
                  lr=1e-3, check_test_loss_every_n_epoch=1):
         super().__init__()
         self.save_hyperparameters()
@@ -32,7 +33,7 @@ class MoGTrainer(pl.LightningModule):
             num_heads=num_heads,
             num_blocks=num_blocks,
             max_components=max_components,
-            vocab_size=100 # not used in this case
+            mdn_components=mdn_components
         )
 
     def forward(self, x):
@@ -216,8 +217,8 @@ class MoGTrainer(pl.LightningModule):
 
         Args:
             existence_logits: Predicted existence logits, shape [batch_size, max_components, 1]
-            pred_means: Predicted means, shape [batch_size, max_components, dim_output]
-            pred_logvars: Predicted log-variances, shape [batch_size, max_components, dim_output]
+            pred_means: Predicted means. a tuple of (pi, mu, sigma)
+            pred_logvars: Predicted log-variances. a tuple of (pi, mu, sigma)
             mog_params: Dictionary containing ground truth MoG parameters.
 
         Returns:
@@ -240,30 +241,28 @@ class MoGTrainer(pl.LightningModule):
         total_mean_l2_loss = 0
         total_logvar_l2_loss = 0
 
-        for i in range(pred_means.shape[0]):  # Iterate over the batch
-            for j in range(pred_means.shape[1]): # Iterate over the maximum number of components
+        for i in range(pred_means[0].shape[0]):  # Iterate over the batch
+            for j in range(pred_means[0].shape[1]): # Iterate over the maximum number of components
                 if mog_params["existence"][i, j] == 0:
                     # this should be the end of the components
                     continue
-                pred_means_ij = pred_means[i, j, :]
-                pred_logvars_ij = pred_logvars[i, j, :]
-                true_means_ij = mog_params["means"][i, j, :]
-                true_logvars_ij = mog_params["logvars"][i, j, :]
+                
+                mean_l2_loss = -log_prob_mog(mog_params["means"][i,j,:], 
+                                             pred_means[0][i,j], 
+                                             pred_means[1][i,j], 
+                                             pred_means[2][i,j])
+                logvar_l2_loss = -log_prob_mog(mog_params["logvars"][i,j,:], 
+                                               pred_logvars[0][i,j], 
+                                               pred_logvars[1][i,j], 
+                                               pred_logvars[2][i,j])
 
-                if pred_means_ij.shape[0] == 0 or true_means_ij.shape[0] == 0:
-                    continue
-
-                # Calculate L2 loss for matched means and log-variances
-                mean_l2_loss = F.mse_loss(pred_means_ij, true_means_ij, reduction='sum')
-                logvar_l2_loss = F.mse_loss(pred_logvars_ij, true_logvars_ij, reduction='sum')
-
-                total_mean_l2_loss += mean_l2_loss
-                total_logvar_l2_loss += logvar_l2_loss
+                total_mean_l2_loss += mean_l2_loss.squeeze()
+                total_logvar_l2_loss += logvar_l2_loss.squeeze()
 
         # Normalize losses by the number of samples in the batch
-        if pred_means.shape[0] > 0:
-            total_mean_l2_loss = total_mean_l2_loss / pred_means.shape[0]
-            total_logvar_l2_loss = total_logvar_l2_loss / pred_means.shape[0]
+        if pred_means[0].shape[0] > 0:
+            total_mean_l2_loss = total_mean_l2_loss / pred_means[0].shape[0]
+            total_logvar_l2_loss = total_logvar_l2_loss / pred_means[0].shape[0]
 
         total_loss = existence_loss + total_mean_l2_loss + total_logvar_l2_loss
         return total_loss, existence_loss, total_mean_l2_loss, total_logvar_l2_loss
@@ -275,7 +274,7 @@ class MoGTrainer(pl.LightningModule):
     def prepare_data(self):
         # Generate synthetic data
         train_mog_params, train_samples = generate_gaussian_mixture(
-            batch_size=50000, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
+            batch_size=10000, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
             dim_output=self.hparams.dim_output, min_dist=self.hparams.min_dist,
             min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
             num_samples=self.hparams.num_samples
@@ -339,7 +338,7 @@ if __name__ == "__main__":
 
     model = MoGTrainer(
         dim_output=2, dim_hidden=64, num_heads=4, num_blocks=6, max_components=5,
-        min_components=1, min_dist=2.0, min_logvar=-2.0, max_logvar=2.0, num_samples=100,
+        mdn_components=4, min_components=1, min_dist=2.0, min_logvar=-2.0, max_logvar=2.0, num_samples=100,
         check_test_loss_every_n_epoch=1
     )
 

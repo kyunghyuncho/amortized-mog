@@ -2,6 +2,35 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+from utils import reshape_last_dim
+
+class MDN(nn.Module):
+    def __init__(self, dim_input, dim_output, num_components):
+        super(MDN, self).__init__()
+        self.num_components = num_components
+        self.fc_pi = nn.Linear(dim_input, num_components)
+        self.fc_mu = nn.Linear(dim_input, num_components * dim_output)
+        self.fc_sigma = nn.Linear(dim_input, num_components * dim_output)
+
+    def forward(self, x):
+        pi = F.softmax(self.fc_pi(x), -1)
+        mu = reshape_last_dim(self.fc_mu(x), self.num_components, -1)
+        sigma = reshape_last_dim(torch.exp(self.fc_sigma(x)), self.num_components, -1)
+        return pi, mu, sigma
+    
+    def sample(self, x):
+        pi, mu, sigma = self(x)
+        pis = torch.distributions.Categorical(pi).sample().unsqueeze(-1).unsqueeze(-1)
+        samples = torch.gather(mu, -2, pis.repeat(1, 1, 1, mu.size(-1)))
+        samples = samples + torch.randn_like(samples) * torch.gather(sigma, -2, pis.repeat(1, 1, 1, sigma.size(-1)))
+        samples = samples.squeeze(-2)
+        return samples
+    
+    def log_prob(self, x, y):
+        pi, mu, sigma = self(x)
+        dist = torch.distributions.Normal(mu, sigma)
+        log_probs = torch.logsumexp(torch.log(pi) + dist.log_prob(y.unsqueeze(1)), 1)
+        return torch.sum(log_probs, -1)
 
 class MAB(nn.Module):
     def __init__(self, dim_Q, dim_K, dim_V, num_heads, ln=False):

@@ -1,10 +1,17 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from modules import SetTransformer2
+from modules import SetTransformer2, MDN
 
 class ConditionalTransformerLM(nn.Module):
-    def __init__(self, dim_set_output, dim_output, dim_hidden, num_heads, num_blocks, max_components, vocab_size):
+    def __init__(self, 
+                 dim_set_output, 
+                 dim_output, 
+                 dim_hidden, 
+                 num_heads, 
+                 num_blocks, 
+                 max_components, 
+                 mdn_components):
         super().__init__()
         self.max_components = max_components
         self.dim_output = dim_output
@@ -22,8 +29,8 @@ class ConditionalTransformerLM(nn.Module):
 
         # Output layers
         self.existence_predictor = nn.Linear(dim_hidden, 1)
-        self.mean_predictor = nn.Linear(dim_hidden, dim_output)
-        self.logvar_predictor = nn.Linear(dim_hidden, dim_output)
+        self.mean_predictor = MDN(dim_hidden, dim_output, mdn_components)
+        self.logvar_predictor = MDN(dim_hidden, dim_output, mdn_components)
 
         # Token to indicate start of sequence (learnable)
         self.sos_token = nn.Parameter(torch.randn(1, 1, 1 + 2 * dim_output))
@@ -70,8 +77,8 @@ class ConditionalTransformerLM(nn.Module):
 
             # Predict existence, mean, and logvar
             existence_logits = self.existence_predictor(transformer_output[:, :-1, :])  # Shape: [batch_size, max_components, 1]
-            means = self.mean_predictor(transformer_output[:, :-1, :])  # Shape: [batch_size, max_components, dim_output]
-            logvars = self.logvar_predictor(transformer_output[:, :-1, :])  # Shape: [batch_size, max_components, dim_output]
+            means = self.mean_predictor(transformer_output[:, :-1, :])  # Shape: 3x [batch_size, max_components, dim_output]
+            logvars = self.logvar_predictor(transformer_output[:, :-1, :])  # Shape: 3x [batch_size, max_components, dim_output]
         else:  # Inference mode
             # in the inference mode, we need to collect existence, mean, and logvar on the fly
             existence_logits = None
@@ -94,11 +101,9 @@ class ConditionalTransformerLM(nn.Module):
 
                 # Predict the next component
                 existence_logit = self.existence_predictor(transformer_output_step)
-                mean = self.mean_predictor(transformer_output_step)
-                logvar = self.logvar_predictor(transformer_output_step)
-
-                # argmax to get existence
-                existence = (existence_logit > 0).float()
+                existence = (existence_logit > 0).float() # argmax. TODO: sampling
+                mean = self.mean_predictor.sample(transformer_output_step)
+                logvar = self.logvar_predictor.sample(transformer_output_step)
 
                 # Concatenate to the existing predictions
                 if existence_logits is None:
