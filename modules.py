@@ -20,7 +20,10 @@ class MDN(nn.Module):
     
     def sample(self, x, argmax=False):
         pi, mu, sigma = self(x)
-        pis = torch.distributions.Categorical(pi).sample().unsqueeze(-1).unsqueeze(-1)
+        if argmax:
+            pis = torch.argmax(pi, -1).unsqueeze(-1).unsqueeze(-1)
+        else:
+            pis = torch.distributions.Categorical(pi).sample().unsqueeze(-1).unsqueeze(-1)
         samples = torch.gather(mu, -2, pis.repeat(1, 1, 1, mu.size(-1)))
         if not argmax:
             samples = samples + torch.randn_like(samples) * torch.gather(sigma, -2, pis.repeat(1, 1, 1, sigma.size(-1)))
@@ -50,7 +53,7 @@ class MAB(nn.Module):
         V_ = torch.cat(V.split(dim_split, 2), 0)
 
         A = torch.softmax(Q_.bmm(K_.transpose(1,2))/math.sqrt(self.dim_V), 2)
-        O = torch.cat((Q_ + A.bmm(V_)).split(Q.size(0), 0), 2)
+        O = torch.cat(A.bmm(V_).split(Q.size(0), 0), 2) + Q
         O = O if getattr(self, 'ln0', None) is None else self.ln0(O)
         O = O + F.relu(self.fc_o(O))
         O = O if getattr(self, 'ln1', None) is None else self.ln1(O)
