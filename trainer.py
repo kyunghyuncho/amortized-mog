@@ -1,14 +1,18 @@
 import torch
 import torch.nn.functional as F
+
+from torch.utils.data import DataLoader, TensorDataset
+
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping
-
 from pytorch_lightning.loggers import WandbLogger
-from torch.utils.data import DataLoader, TensorDataset
+
 from amortized_mog import ConditionalTransformerLM
 from synthetic_mog import generate_gaussian_mixture
 from modules import SetTransformer2
+
 import wandb
+
 from scipy.optimize import linear_sum_assignment
 import numpy as np
 
@@ -238,7 +242,7 @@ class MoGTrainer(pl.LightningModule):
 
         for i in range(pred_means.shape[0]):  # Iterate over the batch
             # Get predicted components
-            pred_num_components = (torch.sigmoid(existence_logits[i]) > 0.5).sum()
+            pred_num_components = mog_params["num_components"][i]  # Use the true number of components
             pred_means_i = pred_means[i, :pred_num_components, :]
             pred_logvars_i = pred_logvars[i, :pred_num_components, :]
 
@@ -281,17 +285,19 @@ class MoGTrainer(pl.LightningModule):
     def prepare_data(self):
         # Generate synthetic data
         train_mog_params, train_samples = generate_gaussian_mixture(
-            batch_size=10000, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
+            batch_size=50000, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
             dim_output=self.hparams.dim_output, min_dist=self.hparams.min_dist,
             min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
             num_samples=self.hparams.num_samples
         )
+
         val_mog_params, val_samples = generate_gaussian_mixture(
             batch_size=500, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
             dim_output=self.hparams.dim_output, min_dist=self.hparams.min_dist,
             min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
             num_samples=self.hparams.num_samples
         )
+
         test_mog_params, test_samples = generate_gaussian_mixture(
             batch_size=500, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
             dim_output=self.hparams.dim_output, min_dist=self.hparams.min_dist,

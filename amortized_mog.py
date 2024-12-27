@@ -14,7 +14,10 @@ class ConditionalTransformerLM(nn.Module):
         self.input_embedding = nn.Linear(dim_set_output + 1 + 2 * dim_output, dim_hidden) # +1 for existence, +2*dim_output for mean and logvar
 
         # Transformer (decoder-only)
-        decoder_layer = nn.TransformerEncoderLayer(d_model=dim_hidden, nhead=num_heads, dim_feedforward=dim_hidden, batch_first=True)
+        decoder_layer = nn.TransformerEncoderLayer(d_model=dim_hidden, 
+                                                   nhead=num_heads, 
+                                                   dim_feedforward=dim_hidden, 
+                                                   batch_first=True)
         self.transformer = nn.TransformerEncoder(decoder_layer, num_layers=num_blocks)
 
         # Output layers
@@ -23,7 +26,7 @@ class ConditionalTransformerLM(nn.Module):
         self.logvar_predictor = nn.Linear(dim_hidden, dim_output)
 
         # Token to indicate start of sequence (learnable)
-        self.sos_token = nn.Parameter(torch.randn(1, 1, dim_hidden))
+        self.sos_token = nn.Parameter(torch.randn(1, 1, 1 + 2 * dim_output))
 
         # Positional encoding
         self.positional_encoding = nn.Parameter(torch.randn(1, max_components + 1, dim_hidden)) # +1 for set_transformer output
@@ -45,17 +48,18 @@ class ConditionalTransformerLM(nn.Module):
         batch_size = set_transformer_output.shape[0]
 
         # Create SOS token (start of sequence)
-        sos_tokens = self.sos_token.repeat(batch_size, 1, 1)  # Shape: [batch_size, 1, dim_hidden]
+        sos_tokens = self.sos_token.repeat(batch_size, 1, 1)  # Shape: [batch_size, 1, 1 + 2 * dim_output]
 
         # Prepare input embeddings for the Transformer
         if targets is not None:  # Training mode
             # Concatenate Set Transformer output with target components
-            set_transformer_output_expanded = set_transformer_output.unsqueeze(1).repeat(1, self.max_components, 1)
-            inputs = torch.cat([set_transformer_output_expanded, targets], dim=-1)
+            set_transformer_output_expanded = set_transformer_output.unsqueeze(1).repeat(1, self.max_components+1, 1)
+            expanded_targets = torch.cat([sos_tokens, targets], dim=1)
+            inputs = torch.cat([set_transformer_output_expanded, expanded_targets], dim=-1)
             inputs = self.input_embedding(inputs)
 
             # Add positional encodings
-            inputs = torch.cat([sos_tokens, inputs], dim=1)
+            # inputs = torch.cat([sos_tokens, inputs], dim=1)
             inputs = inputs + self.positional_encoding[:, :inputs.shape[1], :]
 
             # Create target mask for autoregressive prediction
@@ -65,16 +69,17 @@ class ConditionalTransformerLM(nn.Module):
             transformer_output = self.transformer(inputs, mask=tgt_mask)
 
             # Predict existence, mean, and logvar
-            existence_logits = self.existence_predictor(transformer_output[:, 1:, :])  # Shape: [batch_size, max_components, 1]
-            means = self.mean_predictor(transformer_output[:, 1:, :])  # Shape: [batch_size, max_components, dim_output]
-            logvars = self.logvar_predictor(transformer_output[:, 1:, :])  # Shape: [batch_size, max_components, dim_output]
+            existence_logits = self.existence_predictor(transformer_output[:, :-1, :])  # Shape: [batch_size, max_components, 1]
+            means = self.mean_predictor(transformer_output[:, :-1, :])  # Shape: [batch_size, max_components, dim_output]
+            logvars = self.logvar_predictor(transformer_output[:, :-1, :])  # Shape: [batch_size, max_components, dim_output]
         else:  # Inference mode
             # in the inference mode, we need to collect existence, mean, and logvar on the fly
             existence_logits = None
             means = None
             logvars = None
 
-            transformer_output = sos_tokens
+            transformer_output = self.input_embedding(torch.cat([set_transformer_output.unsqueeze(1), 
+                                                                 sos_tokens], dim=-1))
             # Add positional encodings
             transformer_output = transformer_output + self.positional_encoding[:, :1, :]
             for _ in range(self.max_components):
