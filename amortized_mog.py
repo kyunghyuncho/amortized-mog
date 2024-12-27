@@ -102,8 +102,8 @@ class ConditionalTransformerLM(nn.Module):
                 # Predict the next component
                 existence_logit = self.existence_predictor(transformer_output_step)
                 existence = (existence_logit > 0).float() # argmax. TODO: sampling
-                mean = self.mean_predictor.sample(transformer_output_step)
-                logvar = self.logvar_predictor.sample(transformer_output_step)
+                mean = self.mean_predictor.sample(transformer_output_step, argmax=True)
+                logvar = self.logvar_predictor.sample(transformer_output_step, argmax=True)
 
                 # Concatenate to the existing predictions
                 if existence_logits is None:

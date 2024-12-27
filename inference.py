@@ -62,11 +62,13 @@ def infer_mog(checkpoint_file, input_set):
 if __name__ == "__main__":
     # Sample input set (replace with your actual input data)
     input_set = torch.randn(100, 2) / 3.
-    input_set[:, 0] = input_set[:, 0] + 2.
+    input_set[:, 0] = input_set[:, 0] + 0.
     input_set = torch.cat([input_set, torch.randn(100, 2) / 2. + 3.], dim=0)
 
+    checkpoint_path = "/Users/kyunghyuncho/Repos/amortized-mog/amortized-mog-fitting"
+
     # Perform inference
-    predicted_mog = infer_mog(find_latest_checkpoint("/Users/kyunghyuncho/Repos/amortized-mog/amortized-mog-fitting/i6fksp7q/checkpoints/"),
+    predicted_mog = infer_mog(find_latest_checkpoint(checkpoint_path+"/sfo0f5tm/checkpoints/"),
                               input_set)
     
     # Print the predicted MoG parameters

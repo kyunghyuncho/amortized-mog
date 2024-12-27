@@ -18,20 +18,15 @@ class MDN(nn.Module):
         sigma = reshape_last_dim(torch.exp(self.fc_sigma(x)), self.num_components, -1)
         return pi, mu, sigma
     
-    def sample(self, x):
+    def sample(self, x, argmax=False):
         pi, mu, sigma = self(x)
         pis = torch.distributions.Categorical(pi).sample().unsqueeze(-1).unsqueeze(-1)
         samples = torch.gather(mu, -2, pis.repeat(1, 1, 1, mu.size(-1)))
-        samples = samples + torch.randn_like(samples) * torch.gather(sigma, -2, pis.repeat(1, 1, 1, sigma.size(-1)))
+        if not argmax:
+            samples = samples + torch.randn_like(samples) * torch.gather(sigma, -2, pis.repeat(1, 1, 1, sigma.size(-1)))
         samples = samples.squeeze(-2)
         return samples
     
-    def log_prob(self, x, y):
-        pi, mu, sigma = self(x)
-        dist = torch.distributions.Normal(mu, sigma)
-        log_probs = torch.logsumexp(torch.log(pi) + dist.log_prob(y.unsqueeze(1)), 1)
-        return torch.sum(log_probs, -1)
-
 class MAB(nn.Module):
     def __init__(self, dim_Q, dim_K, dim_V, num_heads, ln=False):
         super(MAB, self).__init__()
