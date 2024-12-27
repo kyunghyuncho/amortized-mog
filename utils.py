@@ -33,40 +33,40 @@ def log_prob_mog(samples, pi, mu, sigma):
         samples = samples.unsqueeze(0)
     dist = torch.distributions.Normal(mu, sigma)
     log_lik = dist.log_prob(samples.unsqueeze(1))
-    log_probs = torch.logsumexp(torch.log(pi).unsqueeze(0).unsqueeze(-1) + log_lik, -1)
+    log_probs = torch.logsumexp(torch.log(pi).unsqueeze(0).unsqueeze(-1) + log_lik, 1)
     return torch.sum(log_probs, -1)
 
 def reshape_last_dim(tensor, i, j):
-  """Reshapes the last dimension of a PyTorch tensor into (i, j),
-  supporting -1 for automatic calculation of one of the dimensions.
+    """Reshapes the last dimension of a PyTorch tensor into (i, j),
+    supporting -1 for automatic calculation of one of the dimensions.
 
-  Args:
-    tensor: The input tensor with arbitrary number of dimensions.
-    i: The first dimension of the reshaped last dimension. Can be -1.
-    j: The second dimension of the reshaped last dimension. Can be -1.
+    Args:
+        tensor: The input tensor with arbitrary number of dimensions.
+        i: The first dimension of the reshaped last dimension. Can be -1.
+        j: The second dimension of the reshaped last dimension. Can be -1.
+        
+    Returns:
+        A new tensor with the last dimension reshaped to (i, j).
+    """
 
-  Returns:
-    A new tensor with the last dimension reshaped to (i, j).
-  """
+    original_shape = tensor.shape
+    last_dim_product = original_shape[-1]
 
-  original_shape = tensor.shape
-  last_dim_product = original_shape[-1]
+    if i == -1 and j == -1:
+        raise ValueError("At most one of i and j can be -1")
 
-  if i == -1 and j == -1:
-    raise ValueError("At most one of i and j can be -1")
+    if i == -1:
+        if last_dim_product % j != 0:
+            raise ValueError(f"Last dimension size {last_dim_product} is not divisible by {j} when i is -1")
+        i = last_dim_product // j
+    elif j == -1:
+        if last_dim_product % i != 0:
+            raise ValueError(f"Last dimension size {last_dim_product} is not divisible by {i} when j is -1")
+        j = last_dim_product // i
+    elif i * j != last_dim_product:
+        raise ValueError(f"Cannot reshape last dimension of size {last_dim_product} into ({i}, {j})")
 
-  if i == -1:
-    if last_dim_product % j != 0:
-      raise ValueError(f"Last dimension size {last_dim_product} is not divisible by {j} when i is -1")
-    i = last_dim_product // j
-  elif j == -1:
-    if last_dim_product % i != 0:
-      raise ValueError(f"Last dimension size {last_dim_product} is not divisible by {i} when j is -1")
-    j = last_dim_product // i
-  elif i * j != last_dim_product:
-      raise ValueError(f"Cannot reshape last dimension of size {last_dim_product} into ({i}, {j})")
+    new_shape = original_shape[:-1] + (i, j)
+    reshaped_tensor = tensor.reshape(new_shape)
 
-  new_shape = original_shape[:-1] + (i, j)
-  reshaped_tensor = tensor.reshape(new_shape)
-
-  return reshaped_tensor
+    return reshaped_tensor
