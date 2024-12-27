@@ -2,9 +2,9 @@ import torch
 from modules import SetTransformer2
 from amortized_mog import ConditionalTransformerLM
 import pytorch_lightning as pl
+from trainer import MoGTrainer
 
-def infer_mog(set_transformer_checkpoint, 
-              conditional_lm_checkpoint, 
+def infer_mog(checkpoint_file, 
               input_set, 
               max_components, 
               dim_hidden, 
@@ -30,8 +30,9 @@ def infer_mog(set_transformer_checkpoint,
     """
 
     # Load the trained models
-    set_transformer = SetTransformer2.load_from_checkpoint(set_transformer_checkpoint)
-    conditional_lm = ConditionalTransformerLM.load_from_checkpoint(conditional_lm_checkpoint)
+    trainer = MoGTrainer.load_from_checkpoint(checkpoint_file)
+    set_transformer = trainer.set_transformer
+    conditional_lm = trainer.conditional_lm
 
     # Set models to eval mode
     set_transformer.eval()
@@ -45,13 +46,13 @@ def infer_mog(set_transformer_checkpoint,
         set_transformer_output = set_transformer(input_set)
 
         # Pass SetTransformer++ output through ConditionalTransformerLM for inference
-        existence_logits, means, logvars = conditional_lm(set_transformer_output)
+        existence, means, logvars = conditional_lm(set_transformer_output)
 
     # Convert logits to probabilities
-    existence_probs = torch.sigmoid(existence_logits).squeeze(0)  # Remove batch dimension
+    existence = existence.squeeze(0)  # Remove batch dimension
 
     # Determine the number of components based on existence probabilities
-    num_components = (existence_probs > 0.5).sum().item()
+    num_components = int(existence.sum().item())
 
     predicted_mog = {
         "num_components": num_components,
@@ -67,14 +68,35 @@ if __name__ == "__main__":
     input_set = torch.randn(100, 2)
 
     # Perform inference
-    predicted_mog = infer_mog("path/to/set_transformer_checkpoint.ckpt",
-                              "path/to/conditional_lm_checkpoint.ckpt",
+    predicted_mog = infer_mog("/Users/kyunghyuncho/Repos/amortized-mog/amortized-mog-fitting/tgcpnkst/checkpoints/epoch=35-step=11268.ckpt",
                               input_set,
                               max_components=5,
                               dim_hidden=64,
                               dim_output=2,
                               num_heads=4,
                               num_blocks=2)
-
+    
     # Print the predicted MoG parameters
     print(predicted_mog)
+
+    # Plot `input_set` and the predicted MoG components.
+    # Make sure it's pretty and saved into a .png file.
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    plt.scatter(input_set[:, 0], input_set[:, 1], c='b', alpha=0.5, label='Input Set')
+    for i in range(predicted_mog["num_components"]):
+        mean = predicted_mog["means"][i]
+        logvar = predicted_mog["logvars"][i]
+        std = np.sqrt(np.exp(logvar))
+
+        # std is a 2-dim vector. We need to plot a elipse with radius std[0] and std[1] centered at mean.
+        elipse = plt.matplotlib.patches.Ellipse(mean, std[0].item(), std[1].item(), fill=False, edgecolor='r', linestyle='--', linewidth=1.5)
+
+        plt.gca().add_artist(elipse)
+    plt.legend()
+    plt.savefig("predicted_mog.png")
+
+
+    
+    

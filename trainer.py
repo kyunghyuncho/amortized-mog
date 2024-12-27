@@ -57,9 +57,12 @@ class MoGTrainer(pl.LightningModule):
         # Pass SetTransformer++ output and targets through ConditionalTransformerLM
         existence_logits, pred_means, pred_logvars = self.conditional_lm(set_transformer_output, targets)
 
-        loss = self.calculate_loss(existence_logits, pred_means, pred_logvars, mog_params)
-        self.log('train_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        return loss
+        total_loss, existence_loss, mean_l2_loss, logvar_l2_loss = self.calculate_loss(existence_logits, pred_means, pred_logvars, mog_params)
+        self.log('train_loss', total_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('train_existence_loss', existence_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        self.log('train_mean_l2_loss', mean_l2_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        self.log('train_logvar_l2_loss', logvar_l2_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        return total_loss
 
     def validation_step(self, batch, batch_idx):
         num_components, means, logvars, existence, samples = batch
@@ -79,9 +82,12 @@ class MoGTrainer(pl.LightningModule):
         # Pass SetTransformer++ output and targets through ConditionalTransformerLM
         existence_logits, pred_means, pred_logvars = self.conditional_lm(set_transformer_output, targets)
 
-        loss = self.calculate_loss(existence_logits, pred_means, pred_logvars, mog_params)
-        self.log('val_loss', loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
-        return loss
+        total_loss, existence_loss, mean_l2_loss, logvar_l2_loss = self.calculate_loss(existence_logits, pred_means, pred_logvars, mog_params)
+        self.log('val_loss', total_loss, on_step=True, on_epoch=True, prog_bar=True, logger=True)
+        self.log('val_existence_loss', existence_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        self.log('val_mean_l2_loss', mean_l2_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        self.log('val_logvar_l2_loss', logvar_l2_loss, on_step=True, on_epoch=True, prog_bar=False, logger=True)
+        return total_loss
 
     def on_train_epoch_end(self):
         """
@@ -199,6 +205,24 @@ class MoGTrainer(pl.LightningModule):
         return num_components_diff, avg_mean_distance
 
     def calculate_loss(self, existence_logits, pred_means, pred_logvars, mog_params):
+        """
+        Calculates the loss function:
+            1. Cross-entropy loss for existence prediction.
+            2. L2 loss for mean and log-variance after best matching.
+
+        Args:
+            existence_logits: Predicted existence logits, shape [batch_size, max_components, 1]
+            pred_means: Predicted means, shape [batch_size, max_components, dim_output]
+            pred_logvars: Predicted log-variances, shape [batch_size, max_components, dim_output]
+            mog_params: Dictionary containing ground truth MoG parameters.
+
+        Returns:
+            total_loss: The total loss.
+            existence_loss: The existence loss.
+            mean_l2_loss: The L2 loss for the mean.
+            logvar_l2_loss: The L2 loss for the log-variance.
+        """
+        # 1. Cross-entropy loss for existence prediction
         # Get the maximum number of components
         max_components = mog_params["existence"].shape[1]
 
@@ -208,22 +232,47 @@ class MoGTrainer(pl.LightningModule):
         # 1. Cross-entropy loss for existence prediction
         existence_loss = F.binary_cross_entropy_with_logits(existence_logits, mog_params["existence"])
 
-        # 2. Gaussian NLL for mean and log-variance prediction for existing components
-        nll_loss = 0
-        for i in range(existence_logits.shape[0]):  # Iterate over batch
-            for j in range(existence_logits.shape[1]):  # Iterate over components
-                if mog_params["existence"][i, j] == 1:
-                    dist = torch.distributions.Normal(pred_means[i, j], torch.exp(0.5 * pred_logvars[i, j]))
-                    nll = -dist.log_prob(mog_params["means"][i, j]).sum()  # Sum over dimensions
-                    nll_loss += nll
+        # 2. L2 loss for mean and log-variance after best matching
+        total_mean_l2_loss = 0
+        total_logvar_l2_loss = 0
 
-        # Normalize NLL loss by the number of existing components
-        num_existing_components = mog_params["existence"].sum()
-        if num_existing_components > 0:
-            nll_loss = nll_loss / num_existing_components
+        for i in range(pred_means.shape[0]):  # Iterate over the batch
+            # Get predicted components
+            pred_num_components = (torch.sigmoid(existence_logits[i]) > 0.5).sum()
+            pred_means_i = pred_means[i, :pred_num_components, :]
+            pred_logvars_i = pred_logvars[i, :pred_num_components, :]
 
-        total_loss = existence_loss + nll_loss
-        return total_loss
+            # Get ground truth components
+            true_num_components = mog_params["num_components"][i]
+            true_means_i = mog_params["means"][i, :true_num_components, :]
+            true_logvars_i = mog_params["logvars"][i, :true_num_components, :]
+
+            if pred_means_i.shape[0] == 0 or true_means_i.shape[0] == 0:
+                continue
+
+            # Calculate pairwise distances between predicted and true means
+            distances = torch.cdist(pred_means_i, true_means_i)  # [pred_num_components, true_num_components]
+
+            # Convert to numpy for linear_sum_assignment
+            distances_np = distances.detach().cpu().numpy()
+
+            # Find best matching using the Hungarian algorithm
+            row_ind, col_ind = linear_sum_assignment(distances_np)
+
+            # Calculate L2 loss for matched means and log-variances
+            mean_l2_loss = F.mse_loss(pred_means_i[row_ind], true_means_i[col_ind], reduction='sum')
+            logvar_l2_loss = F.mse_loss(pred_logvars_i[row_ind], true_logvars_i[col_ind], reduction='sum')
+
+            total_mean_l2_loss += mean_l2_loss
+            total_logvar_l2_loss += logvar_l2_loss
+
+        # Normalize losses by the number of samples in the batch
+        if pred_means.shape[0] > 0:
+            total_mean_l2_loss = total_mean_l2_loss / pred_means.shape[0]
+            total_logvar_l2_loss = total_logvar_l2_loss / pred_means.shape[0]
+
+        total_loss = existence_loss + total_mean_l2_loss + total_logvar_l2_loss
+        return total_loss, existence_loss, total_mean_l2_loss, total_logvar_l2_loss
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
