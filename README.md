@@ -4,6 +4,6 @@
 
 ```
 > pip install -r ./requirements.txt
-> python ./trainers.py
+> python ./trainer.py
 > python ./inference.py
 ```
