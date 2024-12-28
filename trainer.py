@@ -345,8 +345,8 @@ if __name__ == "__main__":
     model = MoGTrainer(
         dim_output=2,
         dim_hidden=128,
-        num_heads=4,
-        num_blocks=4,
+        num_heads=8,
+        num_blocks=6,
         max_components=5,
         mdn_components=5, 
         min_components=1, 
