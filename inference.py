@@ -3,6 +3,7 @@ from modules import SetTransformer2
 from amortized_mog import ConditionalTransformerLM
 import pytorch_lightning as pl
 from trainer import MoGTrainer
+import sklearn.mixture
 
 from utils import find_latest_checkpoint
 
@@ -60,26 +61,51 @@ def infer_mog(checkpoint_file, input_set):
 
 # Example Usage
 if __name__ == "__main__":
-    # Sample input set (replace with your actual input data)
-    input_set = torch.randn(100, 2) / 3.
-    input_set[:, 0] = input_set[:, 0] + 0.
-    input_set = torch.cat([input_set, torch.randn(100, 2) / 2. + 3.], dim=0)
+    # # sample input set 1
+    # input_set = torch.randn(100, 2) / 3.
+    # input_set[:, 0] = input_set[:, 0] - 3.
+    # input_set = torch.cat([input_set, torch.randn(100, 2) / 3. - 3.], dim=0)
+    # input_set = torch.cat([input_set, torch.randn(100, 2) / 3. + 3.], dim=0)
+    # n_true_components = 3
+
+    # # sample input set 2
+    # input_set = torch.rand(100, 2)
+    # input_set[:, 0] = input_set[:, 0] * 5.
+    # input_set[:, 1] = input_set[:, 1] + 2.
+    # input_set = torch.cat([input_set, torch.randn(100, 2) / 3.], dim=0)
+    # n_true_components = 2
+
+    # sample input set 3
+    input_set = torch.randn(100, 2)
+    input_set[:, 0] = input_set[:, 0] * 5.
+    input_set2 = torch.randn(100, 2)
+    input_set2[:, 1] = input_set2[:, 1] * 5.
+    input_set = torch.cat([input_set, input_set2], dim=0)
+    n_true_components = 2
 
     checkpoint_path = "/Users/kyunghyuncho/Repos/amortized-mog/amortized-mog-fitting"
 
     # Perform inference
-    predicted_mog = infer_mog(find_latest_checkpoint(checkpoint_path+"/sfo0f5tm/checkpoints/"),
+    predicted_mog = infer_mog(find_latest_checkpoint(checkpoint_path+"/686pygir/checkpoints/"),
                               input_set)
     
     # Print the predicted MoG parameters
     print(predicted_mog)
+
+    # Fit MoG with 4 components using scikit-learn
+    gmm = sklearn.mixture.GaussianMixture(n_components=n_true_components, 
+                                          covariance_type='diag')
+    gmm.fit(input_set)
 
     # Plot `input_set` and the predicted MoG components.
     # Make sure it's pretty and saved into a .png file.
     import matplotlib.pyplot as plt
     import numpy as np
 
-    plt.scatter(input_set[:, 0], input_set[:, 1], c='b', alpha=0.5, label='Input Set')
+    # input set should be drawn with small black dots.
+    plt.scatter(input_set[:, 0], input_set[:, 1], 
+                c='k', label='Input Set', s=5, alpha=0.3)
+
     for i in range(predicted_mog["num_components"]):
         mean = predicted_mog["means"][i]
         logvar = predicted_mog["logvars"][i]
@@ -89,13 +115,33 @@ if __name__ == "__main__":
         elipse = plt.matplotlib.patches.Ellipse(mean, 
                                                 2 * std[0].item(), 
                                                 2 * std[1].item(), 
-                                                fill=False, edgecolor='r', linestyle='--', linewidth=1.5)
+                                                fill=False, 
+                                                edgecolor='r', 
+                                                linestyle='--', 
+                                                linewidth=2.5)
 
         plt.gca().add_artist(elipse)
-    plt.legend()
-    plt.savefig("predicted_mog.png")
-
-    import ipdb; ipdb.set_trace()
-
     
+    for i in range(n_true_components):
+        mean = gmm.means_[i]
+        cov = gmm.covariances_[i]
+        std = np.sqrt(cov)
+
+        # std is a 2-dim vector. We need to plot a elipse with radius std[0] and std[1] centered at mean.
+        elipse = plt.matplotlib.patches.Ellipse(mean, 
+                                                2 * std[0], 
+                                                2 * std[1], 
+                                                fill=False, edgecolor='b', linestyle='--', linewidth=2.5)
+
+        plt.gca().add_artist(elipse)
+    
+    # put a custom legend:
+    #  1. blue dot: input points
+    #  2. red dashed ellipse: predicted MoG components
+    #  3. green dashed ellipse: scikit-learn's MoG components
+    plt.legend([plt.Line2D([0], [0], marker='.', color='w', markerfacecolor='k', markersize=10),
+                plt.Line2D([0], [0], color='r', linestyle='--', linewidth=1.5),
+                plt.Line2D([0], [0], color='b', linestyle='--', linewidth=1.5)],
+               ['Input Set', 'Predicted MoG', 'Scikit-Learn MoG'])
+    plt.savefig("predicted_mog.png")    
     

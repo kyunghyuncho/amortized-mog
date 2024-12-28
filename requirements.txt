@@ -3,3 +3,4 @@ pytorch-lightning
 wandb
 scipy
 matplotlib
+scikit-learn
