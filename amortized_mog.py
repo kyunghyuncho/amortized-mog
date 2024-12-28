@@ -36,7 +36,7 @@ class ConditionalTransformerLM(nn.Module):
         self.sos_token = nn.Parameter(torch.randn(1, 1, 1 + 2 * dim_output))
 
         # Positional encoding
-        self.positional_encoding = nn.Parameter(torch.randn(1, max_components + 1, dim_hidden)) # +1 for set_transformer output
+        self.positional_encoding = nn.Parameter(torch.randn(1, max_components + 1, dim_hidden))
 
     def forward(self, set_transformer_output, targets=None):
         """
