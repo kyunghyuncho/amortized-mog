@@ -1,3 +1,5 @@
+import time
+
 import torch
 from modules import SetTransformer2
 from amortized_mog import ConditionalTransformerLM
@@ -7,7 +9,7 @@ import sklearn.mixture
 
 from utils import find_latest_checkpoint
 
-def infer_mog(checkpoint_file, input_set):
+def infer_mog(checkpoint_file, input_set, timeit=False):
     """
     Performs inference using a trained SetTransformer++ and ConditionalTransformerLM.
 
@@ -39,11 +41,16 @@ def infer_mog(checkpoint_file, input_set):
     input_set = input_set.unsqueeze(0)  # Shape becomes [1, num_samples, dim_input]
 
     # Pass input through SetTransformer++
+    if timeit:
+        start_time = time.time()
     with torch.no_grad():
         set_transformer_output = set_transformer(input_set)
 
         # Pass SetTransformer++ output through ConditionalTransformerLM for inference
         existence, means, logvars = conditional_lm(set_transformer_output)
+    if timeit:
+        time_taken = time.time() - start_time
+        print(f"Time taken for inference: {time_taken:.2f}s")
 
     # Convert logits to probabilities
     existence = existence.squeeze(0)  # Remove batch dimension
@@ -57,16 +64,18 @@ def infer_mog(checkpoint_file, input_set):
         "logvars": logvars.squeeze(0)[:num_components]  # Remove batch dimension and take only existing components
     }
 
+    if timeit:
+        return predicted_mog, time_taken
     return predicted_mog
 
 # Example Usage
 if __name__ == "__main__":
-    # # sample input set 1
-    # input_set = torch.randn(100, 2) / 3.
-    # input_set[:, 0] = input_set[:, 0] - 3.
-    # input_set = torch.cat([input_set, torch.randn(100, 2) / 3. - 3.], dim=0)
-    # input_set = torch.cat([input_set, torch.randn(100, 2) / 3. + 3.], dim=0)
-    # n_true_components = 3
+    # sample input set 1
+    input_set = torch.randn(100, 2) / 3.
+    input_set[:, 0] = input_set[:, 0] - 3.
+    input_set = torch.cat([input_set, torch.randn(100, 2) / 3. - 3.], dim=0)
+    input_set = torch.cat([input_set, torch.randn(100, 2) / 3. + 3.], dim=0)
+    n_true_components = 3
 
     # # sample input set 2
     # input_set = torch.rand(100, 2)
@@ -75,27 +84,39 @@ if __name__ == "__main__":
     # input_set = torch.cat([input_set, torch.randn(100, 2) / 3.], dim=0)
     # n_true_components = 2
 
-    # sample input set 3
-    input_set = torch.randn(100, 2)
-    input_set[:, 0] = input_set[:, 0] * 5.
-    input_set2 = torch.randn(100, 2)
-    input_set2[:, 1] = input_set2[:, 1] * 5.
-    input_set = torch.cat([input_set, input_set2], dim=0)
-    n_true_components = 2
+    # # sample input set 3
+    # input_set = torch.randn(100, 2)
+    # input_set[:, 0] = input_set[:, 0] * 5.
+    # input_set2 = torch.randn(100, 2)
+    # input_set2[:, 1] = input_set2[:, 1] * 5.
+    # input_set = torch.cat([input_set, input_set2], dim=0)
+    # n_true_components = 2
 
+    n_trials = 1
     checkpoint_path = "/Users/kyunghyuncho/Repos/amortized-mog/amortized-mog-fitting"
 
-    # Perform inference
-    predicted_mog = infer_mog(find_latest_checkpoint(checkpoint_path+"/686pygir/checkpoints/"),
-                              input_set)
-    
+    times = []
+    for i in range(n_trials):
+        # Perform inference and time it
+        predicted_mog, time_taken = infer_mog(find_latest_checkpoint(checkpoint_path+"/1m5u40lm/checkpoints/"),
+                                              input_set, timeit=True)
+        times.append(time_taken)
+    print(f"Average time taken for {n_trials} trials: {sum(times) / n_trials:.5f}s")
+    print(f"Standard deviation: {torch.tensor(times).std():.5f}s")
+
     # Print the predicted MoG parameters
     print(predicted_mog)
 
     # Fit MoG with 4 components using scikit-learn
-    gmm = sklearn.mixture.GaussianMixture(n_components=n_true_components, 
-                                          covariance_type='diag')
-    gmm.fit(input_set)
+    times = []
+    for i in range(n_trials):
+        start_time = time.time()
+        gmm = sklearn.mixture.GaussianMixture(n_components=n_true_components, 
+                                            covariance_type='diag')
+        gmm.fit(input_set)
+        times.append(time.time() - start_time)
+    print(f"Average time taken for {n_trials} trials (scikit-learn): {sum(times) / n_trials:.5f}s")
+    print(f"Standard deviation: {torch.tensor(times).std():.5f}s")
 
     # Plot `input_set` and the predicted MoG components.
     # Make sure it's pretty and saved into a .png file.

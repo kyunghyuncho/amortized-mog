@@ -25,7 +25,12 @@ class MoGTrainer(pl.LightningModule):
         self.save_hyperparameters()
 
         # Instantiate SetTransformer++ and ConditionalTransformerLM
-        self.set_transformer = SetTransformer2(dim_output, dim_hidden, num_heads, num_blocks, dim_output, ln=True)
+        self.set_transformer = SetTransformer2(dim_output, 
+                                               dim_hidden, 
+                                               num_heads, 
+                                               num_blocks, 
+                                               dim_output, 
+                                               ln=True)
         self.conditional_lm = ConditionalTransformerLM(
             dim_set_output=dim_hidden,
             dim_output=dim_output,
@@ -330,16 +335,27 @@ if __name__ == "__main__":
     )
 
     trainer = pl.Trainer(
-        max_epochs=1000,
+        max_epochs=10_000,
+        # gradient_clip_val=1.0,
         logger=wandb_logger,  # Use wandb_logger
         accelerator="cpu",
         callbacks=[early_stopping]  # Add the callback
     )
 
     model = MoGTrainer(
-        dim_output=2, dim_hidden=128, num_heads=4, num_blocks=4, max_components=5,
-        mdn_components=4, min_components=1, min_dist=2.0, min_logvar=-2.0, max_logvar=2.0, num_samples=100,
-        check_test_loss_every_n_epoch=1
+        dim_output=2,
+        dim_hidden=128,
+        num_heads=4,
+        num_blocks=4,
+        max_components=5,
+        mdn_components=5, 
+        min_components=1, 
+        min_dist=2.0,
+        min_logvar=-2.0,
+        max_logvar=2.0,
+        num_samples=100,
+        check_test_loss_every_n_epoch=1, 
+        lr=1e-3
     )
 
     trainer.fit(model)
