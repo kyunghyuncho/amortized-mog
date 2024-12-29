@@ -28,8 +28,6 @@ class MoGTrainer(pl.LightningModule):
         self.set_transformer = SetTransformer2(dim_output, 
                                                dim_hidden, 
                                                num_heads, 
-                                               num_blocks, 
-                                               dim_hidden, 
                                                ln=True)
         self.conditional_lm = ConditionalTransformerLM(
             dim_set_output=dim_hidden,
@@ -346,7 +344,7 @@ if __name__ == "__main__":
         dim_output=2,
         dim_hidden=128,
         num_heads=8,
-        num_blocks=8,
+        num_blocks=16,
         max_components=3,
         mdn_components=5, 
         min_components=1, 

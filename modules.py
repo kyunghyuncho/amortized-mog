@@ -90,7 +90,7 @@ class PMA(nn.Module):
         return self.mab(self.S.repeat(X.size(0), 1, 1), X)
 
 class SetTransformer2(nn.Module):
-    def __init__(self, dim_input, dim_hidden, num_heads, num_blocks, dim_output, ln=False):
+    def __init__(self, dim_input, dim_hidden, num_heads, ln=False):
         super().__init__()
         self.enc = nn.Sequential(
             SAB(dim_input, dim_hidden, num_heads, ln=ln),
@@ -103,10 +103,8 @@ class SetTransformer2(nn.Module):
             SAB(dim_hidden, dim_hidden, num_heads, ln=ln),
             SAB(dim_hidden, dim_hidden, num_heads, ln=ln)
         )
-        self.fc_out = nn.Linear(dim_hidden, dim_output)
 
     def forward(self, x):
         x = self.enc(x)
         x = self.dec(x)
-        x = self.fc_out(x)
         return x.squeeze(-2)
