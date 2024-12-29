@@ -344,7 +344,7 @@ if __name__ == "__main__":
         dim_output=2,
         dim_hidden=128,
         num_heads=8,
-        num_blocks=16,
+        num_blocks=4,
         max_components=3,
         mdn_components=5, 
         min_components=1, 
