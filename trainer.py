@@ -104,6 +104,11 @@ class MoGTrainer(pl.LightningModule):
         if self.current_epoch % self.hparams.check_test_loss_every_n_epoch == 0:
             self.evaluate_test_metrics()
 
+        """
+        Refresh the training dataset.
+        """
+        self.prepare_data(train_only=True)
+
     def calculate_metrics(self, existence, pred_means, mog_params):
         """
         Calculates the evaluation metrics:
@@ -271,27 +276,13 @@ class MoGTrainer(pl.LightningModule):
         return total_loss, existence_loss, total_mean_l2_loss, total_logvar_l2_loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
         return optimizer
 
-    def prepare_data(self):
+    def prepare_data(self, train_only=False):
         # Generate synthetic data
         train_mog_params, train_samples = generate_gaussian_mixture(
-            batch_size=10000, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
-            dim_output=self.hparams.dim_output, min_dist=self.hparams.min_dist,
-            min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
-            num_samples=self.hparams.num_samples
-        )
-
-        val_mog_params, val_samples = generate_gaussian_mixture(
-            batch_size=500, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
-            dim_output=self.hparams.dim_output, min_dist=self.hparams.min_dist,
-            min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
-            num_samples=self.hparams.num_samples
-        )
-
-        test_mog_params, test_samples = generate_gaussian_mixture(
-            batch_size=500, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
+            batch_size=10_000, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
             dim_output=self.hparams.dim_output, min_dist=self.hparams.min_dist,
             min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
             num_samples=self.hparams.num_samples
@@ -299,16 +290,36 @@ class MoGTrainer(pl.LightningModule):
 
         # Convert dictionaries of tensors to individual tensors
         train_mog_params = self._convert_to_tensors(train_mog_params)
-        val_mog_params = self._convert_to_tensors(val_mog_params)
-        test_mog_params = self._convert_to_tensors(test_mog_params)
 
         # Create TensorDatasets and DataLoaders
         self.train_dataset = TensorDataset(*train_mog_params, train_samples)
-        self.val_dataset = TensorDataset(*val_mog_params, val_samples)
-        self.test_dataset = TensorDataset(*test_mog_params, test_samples)
+
+        if not train_only:
+            val_mog_params, val_samples = generate_gaussian_mixture(
+                batch_size=500, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
+                dim_output=self.hparams.dim_output, min_dist=self.hparams.min_dist,
+                min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
+                num_samples=self.hparams.num_samples
+            )
+
+            test_mog_params, test_samples = generate_gaussian_mixture(
+                batch_size=500, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
+                dim_output=self.hparams.dim_output, min_dist=self.hparams.min_dist,
+                min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
+                num_samples=self.hparams.num_samples
+            )
+
+            val_mog_params = self._convert_to_tensors(val_mog_params)
+            test_mog_params = self._convert_to_tensors(test_mog_params)
+
+            self.val_dataset = TensorDataset(*val_mog_params, val_samples)
+            self.test_dataset = TensorDataset(*test_mog_params, test_samples)
 
     def _convert_to_tensors(self, mog_params_dict):
-        return (mog_params_dict['num_components'], mog_params_dict['means'], mog_params_dict['logvars'], mog_params_dict['existence'])
+        return (mog_params_dict['num_components'], 
+                mog_params_dict['means'], 
+                mog_params_dict['logvars'], 
+                mog_params_dict['existence'])
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=32)
@@ -347,7 +358,7 @@ if __name__ == "__main__":
         num_blocks=4,
         max_components=3,
         mdn_components=5, 
-        min_components=1, 
+        min_components=1,
         min_dist=2.0,
         min_logvar=-2.0,
         max_logvar=2.0,
