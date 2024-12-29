@@ -9,7 +9,7 @@ import sklearn.mixture
 
 from utils import find_latest_checkpoint
 
-def infer_mog(checkpoint_file, input_set, timeit=False):
+def infer_mog(checkpoint_file, input_set, timeit=False, argmax=False):
     """
     Performs inference using a trained SetTransformer++ and ConditionalTransformerLM.
 
@@ -47,7 +47,7 @@ def infer_mog(checkpoint_file, input_set, timeit=False):
         set_transformer_output = set_transformer(input_set)
 
         # Pass SetTransformer++ output through ConditionalTransformerLM for inference
-        existence, means, logvars = conditional_lm(set_transformer_output)
+        existence, means, logvars = conditional_lm(set_transformer_output, argmax=argmax)
     if timeit:
         time_taken = time.time() - start_time
         print(f"Time taken for inference: {time_taken:.2f}s")
@@ -70,27 +70,30 @@ def infer_mog(checkpoint_file, input_set, timeit=False):
 
 # Example Usage
 if __name__ == "__main__":
-    # sample input set 1
-    input_set = torch.randn(100, 2) / 3.
-    input_set[:, 0] = input_set[:, 0] - 3.
-    input_set = torch.cat([input_set, torch.randn(100, 2) / 3. - 3.], dim=0)
-    input_set = torch.cat([input_set, torch.randn(100, 2) / 3. + 3.], dim=0)
-    n_true_components = 3
+    case_number = 1
 
-    # # sample input set 2
-    # input_set = torch.rand(100, 2)
-    # input_set[:, 0] = input_set[:, 0] * 5.
-    # input_set[:, 1] = input_set[:, 1] + 2.
-    # input_set = torch.cat([input_set, torch.randn(100, 2) / 3.], dim=0)
-    # n_true_components = 2
-
-    # # sample input set 3
-    # input_set = torch.randn(100, 2)
-    # input_set[:, 0] = input_set[:, 0] * 5.
-    # input_set2 = torch.randn(100, 2)
-    # input_set2[:, 1] = input_set2[:, 1] * 5.
-    # input_set = torch.cat([input_set, input_set2], dim=0)
-    # n_true_components = 2
+    if case_number == 1:
+        # sample input set 1
+        input_set = torch.randn(100, 2) / 3.
+        input_set[:, 0] = input_set[:, 0] - 3.
+        input_set = torch.cat([input_set, torch.randn(100, 2) / 3. - 3.], dim=0)
+        input_set = torch.cat([input_set, torch.randn(100, 2) / 3. + 3.], dim=0)
+        n_true_components = 3
+    elif case_number == 2:
+        input_set = torch.rand(100, 2)
+        input_set[:, 0] = input_set[:, 0] * 5.
+        input_set[:, 1] = input_set[:, 1] + 2.
+        input_set = torch.cat([input_set, torch.randn(100, 2) / 3.], dim=0)
+        n_true_components = 2
+    elif case_number == 3:
+        input_set = torch.randn(100, 2)
+        input_set[:, 0] = input_set[:, 0] * 5.
+        input_set2 = torch.randn(100, 2)
+        input_set2[:, 1] = input_set2[:, 1] * 5.
+        input_set = torch.cat([input_set, input_set2], dim=0)
+        n_true_components = 2
+    else:
+        raise ValueError("Invalid case number")
 
     n_trials = 1
     checkpoint_path = "/Users/kyunghyuncho/Repos/amortized-mog/amortized-mog-fitting"
@@ -98,8 +101,8 @@ if __name__ == "__main__":
     times = []
     for i in range(n_trials):
         # Perform inference and time it
-        predicted_mog, time_taken = infer_mog(find_latest_checkpoint(checkpoint_path+"/1m5u40lm/checkpoints/"),
-                                              input_set, timeit=True)
+        predicted_mog, time_taken = infer_mog(find_latest_checkpoint(checkpoint_path+"/5m7n6ud4/checkpoints/"),
+                                              input_set, timeit=True, argmax=True)
         times.append(time_taken)
     print(f"Average time taken for {n_trials} trials: {sum(times) / n_trials:.5f}s")
     print(f"Standard deviation: {torch.tensor(times).std():.5f}s")
