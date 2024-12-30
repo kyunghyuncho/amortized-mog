@@ -287,12 +287,11 @@ class MoGTrainer(pl.LightningModule):
             min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
             num_samples=self.hparams.num_samples
         )
-
         # Convert dictionaries of tensors to individual tensors
         train_mog_params = self._convert_to_tensors(train_mog_params)
-
         # Create TensorDatasets and DataLoaders
         self.train_dataset = TensorDataset(*train_mog_params, train_samples)
+
 
         if not train_only:
             val_mog_params, val_samples = generate_gaussian_mixture(
@@ -301,6 +300,8 @@ class MoGTrainer(pl.LightningModule):
                 min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
                 num_samples=self.hparams.num_samples
             )
+            val_mog_params = self._convert_to_tensors(val_mog_params)
+            self.val_dataset = TensorDataset(*val_mog_params, val_samples)
 
             test_mog_params, test_samples = generate_gaussian_mixture(
                 batch_size=500, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
@@ -308,11 +309,7 @@ class MoGTrainer(pl.LightningModule):
                 min_logvar=self.hparams.min_logvar, max_logvar=self.hparams.max_logvar,
                 num_samples=self.hparams.num_samples
             )
-
-            val_mog_params = self._convert_to_tensors(val_mog_params)
             test_mog_params = self._convert_to_tensors(test_mog_params)
-
-            self.val_dataset = TensorDataset(*val_mog_params, val_samples)
             self.test_dataset = TensorDataset(*test_mog_params, test_samples)
 
     def _convert_to_tensors(self, mog_params_dict):
@@ -335,28 +332,28 @@ if __name__ == "__main__":
     # Initialize wandb logger
     wandb_logger = WandbLogger(project="amortized-mog-fitting", log_model=True)
 
-    # Add EarlyStopping callback
-    early_stopping = EarlyStopping(
-        monitor="val_loss",  # Monitor validation loss
-        patience=10,         # Stop after 10 epochs with no improvement
-        mode="min",          # Look for minimum validation loss
-        verbose=True         # Print messages when early stopping happens
-    )
+    # # Add EarlyStopping callback
+    # early_stopping = EarlyStopping(
+    #     monitor="val_loss",  # Monitor validation loss
+    #     patience=10,         # Stop after 10 epochs with no improvement
+    #     mode="min",          # Look for minimum validation loss
+    #     verbose=True         # Print messages when early stopping happens
+    # )
 
     trainer = pl.Trainer(
-        max_epochs=10_000,
+        max_epochs=5_000,
         # gradient_clip_val=1.0,
         logger=wandb_logger,  # Use wandb_logger
         accelerator="cpu",
-        callbacks=[early_stopping]  # Add the callback
+        # callbacks=[early_stopping]  # Add the callback
     )
 
     model = MoGTrainer(
         dim_output=2,
         dim_hidden=128,
-        num_heads=8,
-        num_blocks=4,
-        max_components=3,
+        num_heads=4,
+        num_blocks=6,
+        max_components=5,
         mdn_components=5, 
         min_components=1,
         min_dist=2.0,
