@@ -26,7 +26,7 @@ class ConditionalTransformerLM(nn.Module):
                                                    nhead=num_heads, 
                                                    dim_feedforward=dim_hidden, 
                                                    batch_first=True,
-                                                   dropout=0.)
+                                                   dropout=0.1)
         self.transformer = nn.TransformerEncoder(decoder_layer, num_layers=num_blocks)
 
         # Output layers
