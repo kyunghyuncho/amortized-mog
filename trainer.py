@@ -294,7 +294,6 @@ class MoGTrainer(pl.LightningModule):
         # Create TensorDatasets and DataLoaders
         self.train_dataset = TensorDataset(*train_mog_params, train_samples)
 
-
         if not train_only:
             val_mog_params, val_samples = generate_gaussian_mixture(
                 batch_size=500, min_components=self.hparams.min_components, max_components=self.hparams.max_components,
@@ -334,20 +333,20 @@ if __name__ == "__main__":
     # Initialize wandb logger
     wandb_logger = WandbLogger(project="amortized-mog-fitting", log_model=True)
 
-    # # Add EarlyStopping callback
-    # early_stopping = EarlyStopping(
-    #     monitor="val_loss",  # Monitor validation loss
-    #     patience=10,         # Stop after 10 epochs with no improvement
-    #     mode="min",          # Look for minimum validation loss
-    #     verbose=True         # Print messages when early stopping happens
-    # )
+    # Add EarlyStopping callback
+    early_stopping = EarlyStopping(
+        monitor="val_loss",  # Monitor validation loss
+        patience=10,         # Stop after 10 epochs with no improvement
+        mode="min",          # Look for minimum validation loss
+        verbose=True         # Print messages when early stopping happens
+    )
 
     trainer = pl.Trainer(
         max_epochs=5_000,
         # gradient_clip_val=1.0,
         logger=wandb_logger,  # Use wandb_logger
         accelerator="cpu",
-        # callbacks=[early_stopping]  # Add the callback
+        callbacks=[early_stopping]  # Add the callback
     )
 
     model = MoGTrainer(
