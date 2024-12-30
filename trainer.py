@@ -29,7 +29,7 @@ class MoGTrainer(pl.LightningModule):
         self.set_transformer = SetTransformer2(dim_output, 
                                                dim_hidden, 
                                                num_heads, 
-                                               ln=True)
+                                               ln=False)
         self.conditional_lm = ConditionalTransformerLM(
             dim_set_output=dim_hidden,
             dim_output=dim_output,
@@ -278,7 +278,7 @@ class MoGTrainer(pl.LightningModule):
         return total_loss, existence_loss, total_mean_l2_loss, total_logvar_l2_loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.hparams.lr)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
         return optimizer
 
     def prepare_data(self, train_only=False):
@@ -355,7 +355,7 @@ if __name__ == "__main__":
         dim_hidden=64,
         num_heads=4,
         num_blocks=6,
-        mdn_components=5,
+        mdn_components=3,
         dropout=0.1, 
         max_components=5,
         min_components=1,
