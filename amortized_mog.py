@@ -1,7 +1,8 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from modules import SetTransformer2, MDN
+from modules import MDN
+import math
 
 class ConditionalTransformerLM(nn.Module):
     def __init__(self, 
@@ -24,7 +25,8 @@ class ConditionalTransformerLM(nn.Module):
         decoder_layer = nn.TransformerEncoderLayer(d_model=dim_hidden, 
                                                    nhead=num_heads, 
                                                    dim_feedforward=dim_hidden, 
-                                                   batch_first=True)
+                                                   batch_first=True,
+                                                   dropout=0.)
         self.transformer = nn.TransformerEncoder(decoder_layer, num_layers=num_blocks)
 
         # Output layers
@@ -35,10 +37,22 @@ class ConditionalTransformerLM(nn.Module):
         # Token to indicate start of sequence (learnable)
         self.sos_token = nn.Parameter(torch.randn(1, 1, 1 + 2 * dim_output))
 
-        # Positional encoding
-        self.positional_encoding = nn.Parameter(torch.randn(1, max_components + 1, dim_hidden))
+        # Fixed positional encoding
+        self.positional_encoding = self.create_fixed_pos_encoding(3 * max_components, 
+                                                                  dim_hidden) # +1 for set_transformer output
 
-    def forward(self, set_transformer_output, targets=None):
+    def create_fixed_pos_encoding(self, max_len, d_model):
+        """
+        Creates a fixed positional encoding (sine/cosine).
+        """
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe.unsqueeze(0)  # Add batch dimension
+
+    def forward(self, set_transformer_output, targets=None, argmax=True):
         """
         Args:
             set_transformer_output: Output from SetTransformer++, shape [batch_size, dim_set_output]
@@ -101,9 +115,14 @@ class ConditionalTransformerLM(nn.Module):
 
                 # Predict the next component
                 existence_logit = self.existence_predictor(transformer_output_step)
-                existence = (existence_logit > 0).float() # argmax. TODO: sampling
-                mean = self.mean_predictor.sample(transformer_output_step, argmax=True)
-                logvar = self.logvar_predictor.sample(transformer_output_step, argmax=True)
+                if argmax:
+                    existence = (existence_logit > 0).float() # argmax. TODO: sampling
+                    mean = self.mean_predictor.sample(transformer_output_step, argmax=True)
+                    logvar = self.logvar_predictor.sample(transformer_output_step, argmax=True)
+                else:
+                    existence = (torch.sigmoid(existence_logit) > torch.rand(1)).float()
+                    mean = self.mean_predictor.sample(transformer_output_step, argmax=False)
+                    logvar = self.logvar_predictor.sample(transformer_output_step, argmax=False)
 
                 # Concatenate to the existing predictions
                 if existence_logits is None:
