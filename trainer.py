@@ -18,8 +18,9 @@ from scipy.optimize import linear_sum_assignment
 import numpy as np
 
 class MoGTrainer(pl.LightningModule):
-    def __init__(self, dim_output, dim_hidden, num_heads, num_blocks, max_components,
-                 mdn_components, min_components, min_dist, min_logvar, max_logvar, num_samples, 
+    def __init__(self, dim_output, dim_hidden, num_heads, num_blocks, mdn_components, 
+                 max_components, min_components, min_dist, min_logvar, max_logvar, num_samples, 
+                 dropout=0.1, 
                  lr=1e-3, check_test_loss_every_n_epoch=1):
         super().__init__()
         self.save_hyperparameters()
@@ -36,7 +37,8 @@ class MoGTrainer(pl.LightningModule):
             num_heads=num_heads,
             num_blocks=num_blocks,
             max_components=max_components,
-            mdn_components=mdn_components
+            mdn_components=mdn_components,
+            dropout=dropout
         )
 
     def forward(self, x):
@@ -350,11 +352,12 @@ if __name__ == "__main__":
 
     model = MoGTrainer(
         dim_output=2,
-        dim_hidden=128,
+        dim_hidden=64,
         num_heads=4,
         num_blocks=6,
+        mdn_components=5,
+        dropout=0.1, 
         max_components=5,
-        mdn_components=5, 
         min_components=1,
         min_dist=2.0,
         min_logvar=-2.0,
