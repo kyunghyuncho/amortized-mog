@@ -12,3 +12,6 @@ dependencies = [
     "torch>=2.5.1",
     "wandb>=0.19.1",
 ]
+
+[project.scripts]
+amortized-mixture-of-gaussians = "amortized_mixture_of_gaussians:main"

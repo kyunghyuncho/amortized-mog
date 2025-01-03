@@ -1,0 +1,1 @@
+from ._amortized_mixture_of_gaussians import AmortizedMixtureOfGaussians
